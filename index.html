@@ -108,6 +108,38 @@ h2{font-size:1.25rem;font-weight:600}
 #aviso{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:40;width:max-content;max-width:calc(100vw - 32px);padding:12px 16px;border-radius:8px;background:var(--tinta);color:#fff;font-weight:500;font-size:.9375rem;box-shadow:0 6px 18px rgba(0,0,0,.22)}
 #aviso.malo{background:var(--alerta)}
 
+/* ---------- Importar artículos (como BoxHero) ---------- */
+.importar{max-width:1100px;margin:0 auto;padding:28px 32px 48px;display:flex;flex-direction:column;gap:24px}
+.pestanas{display:flex;gap:28px;border-bottom:1px solid var(--linea)}
+.pestana{background:none;border:0;border-bottom:2px solid transparent;padding:10px 0;margin-bottom:-1px;font-size:1.0625rem;font-weight:500;color:var(--gris)}
+.pestana[aria-selected="true"]{color:var(--tinta);border-bottom-color:var(--tinta)}
+.panel-imp{display:flex;flex-direction:column;align-items:flex-start;gap:20px}
+.zona{width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:220px;padding:28px 16px;border:2px dashed #CFCFCF;border-radius:10px;text-align:center;cursor:pointer;color:var(--tinta)}
+.zona:hover,.zona.encima{border-color:var(--tinta);background:var(--piedra)}
+.zona svg{width:56px;height:56px}
+.zona b{font-weight:500}
+.zona small{color:var(--gris);font-size:.875rem}
+.area{min-height:200px;padding:12px 14px;font:400 .9375rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+.panel-imp label.titulo{font-weight:500}
+.imp-tabla{width:100%;border-top:1px solid var(--linea)}
+.imp-cab,.imp-fila{display:grid;grid-template-columns:28px minmax(0,1fr) minmax(0,190px) 80px;gap:12px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--linea)}
+.imp-cab{font-weight:600;font-size:.9375rem}
+.imp-cab span:last-child,.imp-fila .n{text-align:right;font-variant-numeric:tabular-nums}
+.imp-fila .sku{font-size:.875rem;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.imp-fila .art span{white-space:normal}
+.imp-fila.falta{background:#FDF1F0;color:var(--alerta)}
+.imp-fila.falta .art span,.imp-fila.falta .sku{color:var(--alerta)}
+.imp-fila.cero{color:var(--gris)}
+.icono-aviso{width:20px;height:20px;color:var(--alerta)}
+.imp-resumen{font-weight:500}
+.imp-resumen .falta{color:var(--alerta)}
+.imp-acciones{display:flex;gap:12px;align-items:center}
+@media (max-width:700px){
+  .importar{padding:20px 16px 32px}
+  .imp-cab,.imp-fila{grid-template-columns:24px minmax(0,1fr) 56px}
+  .imp-cab .c-sku,.imp-fila .sku{display:none}
+}
+
 /* Celular y tablet: una columna, la vista previa abajo */
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
@@ -153,15 +185,16 @@ h2{font-size:1.25rem;font-weight:600}
     <section aria-labelledby="t-articulos">
       <div class="sec-cab">
         <h2 id="t-articulos">Artículos</h2>
-        <label class="btn" for="archivo" title="Respaldo: solo si no hay conexión con Bsale">
+        <button class="btn" type="button" id="abrir-importar">
           <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2.5" y="2.5" width="13" height="13" rx="1.5"/><path d="M6 6l6 6M12 6l-6 6"/></svg>
           Importar desde Excel
-        </label>
-        <input class="sr" id="archivo" type="file" accept=".xlsx,.xls,.csv">
+        </button>
+        <input class="sr" id="archivo" type="file" accept=".xlsx,.xls,.csv" tabindex="-1" aria-hidden="true">
       </div>
       <div class="origen">
         <p class="nota" id="estado" aria-live="polite">Cargando artículos de Bsale…</p>
         <button class="lnk" type="button" id="actualizar" hidden>Actualizar desde Bsale</button>
+        <button class="lnk" type="button" id="respaldo" hidden>Cargar productos desde un Excel (sin conexión)</button>
       </div>
       <form class="acceso" id="acceso" hidden>
         <label for="clave">Clave de acceso</label>
@@ -199,6 +232,51 @@ h2{font-size:1.25rem;font-weight:600}
   </aside>
 </div>
 
+<section class="importar" id="importar" aria-labelledby="t-importar" hidden>
+  <div>
+    <p class="migas">Etiquetas</p>
+    <h1 id="t-importar">Importar artículos</h1>
+  </div>
+
+  <div id="paso-cargar" class="panel-imp" style="align-items:stretch">
+    <div class="pestanas" role="tablist">
+      <button class="pestana" type="button" role="tab" id="tab-archivo" aria-selected="true" aria-controls="panel-archivo">Subir archivo</button>
+      <button class="pestana" type="button" role="tab" id="tab-pegar" aria-selected="false" aria-controls="panel-pegar">Copiar y pegar</button>
+    </div>
+    <div class="panel-imp" role="tabpanel" id="panel-archivo" aria-labelledby="tab-archivo">
+      <button class="btn btn-negro" type="button" id="plantilla">
+        <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M9 2.5v10M4.5 8l4.5 4.5L13.5 8M3 15.5h12"/></svg>
+        Descargar plantilla
+      </button>
+      <label class="zona" id="zona" for="archivo-imp">
+        <svg viewBox="0 0 56 56" fill="none" aria-hidden="true"><path d="M17 40h-3a10 10 0 0 1-1-19.9A14 14 0 0 1 40 17a10 10 0 0 1 3 19.6" stroke="#9A9A9A" stroke-width="3" stroke-linecap="round"/><path d="M28 46V27m-7 7 7-7 7 7" stroke="#000" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <b>Arrastra tu Excel aquí o haz clic para buscarlo.</b>
+        <small>Se leen las columnas SKU y Stock (o Cantidad). La cantidad es el número de etiquetas.</small>
+      </label>
+      <input class="sr" id="archivo-imp" type="file" accept=".xlsx,.xls,.csv">
+    </div>
+    <div class="panel-imp" role="tabpanel" id="panel-pegar" aria-labelledby="tab-pegar" hidden>
+      <label class="titulo" for="pegado">Pega las columnas SKU y cantidad copiadas desde Excel.</label>
+      <textarea class="input area" id="pegado" spellcheck="false" placeholder="SKU-A4P3TGZQ&#9;2&#10;SKU-QA3B5BDY&#9;1"></textarea>
+      <button class="btn btn-negro" type="button" id="leer-pegado">Continuar</button>
+    </div>
+    <p class="error" id="error-imp" role="alert" hidden></p>
+  </div>
+
+  <div id="paso-vista" class="panel-imp" style="align-items:stretch" hidden>
+    <p class="imp-resumen" id="resumen-imp" aria-live="polite"></p>
+    <div class="imp-tabla">
+      <div class="imp-cab"><span></span><span>Artículo</span><span class="c-sku">SKU</span><span>Copias</span></div>
+      <div id="filas-imp"></div>
+    </div>
+  </div>
+
+  <div class="imp-acciones">
+    <button class="btn" type="button" id="imp-atras">Atrás</button>
+    <button class="btn btn-negro" type="button" id="imp-siguiente" hidden>Siguiente</button>
+  </div>
+</section>
+
 <div id="aviso" role="status" aria-live="polite" hidden></div>
 <div id="hoja" aria-hidden="true"></div>
 
@@ -220,6 +298,7 @@ h2{font-size:1.25rem;font-weight:600}
   /* ---------- Estado ---------- */
   let ARTICULOS = [];               // una entrada por variante (modelo + color + talla)
   const porCodigo = new Map();      // código de barras -> artículo
+  const porSku = new Map();         // SKU -> artículo
   const elegidos = new Map();       // código de barras -> copias (en el orden en que se agregaron)
 
   /* ============================================================
@@ -329,7 +408,8 @@ h2{font-size:1.25rem;font-weight:600}
     marca: (h) => h === "marca",
     color: (h) => h === "color",
     talla: (h) => h === "talla",
-    codigo: (h) => h === "codigo barras" || h === "codigo de barras" || h === "codigo de barra"
+    codigo: (h) => h === "codigo barras" || h === "codigo de barras" || h === "codigo de barra",
+    sku: (h) => h === "sku"
   };
   function leerFilas(filas) {
     let fila = -1, col = {};
@@ -353,7 +433,7 @@ h2{font-size:1.25rem;font-weight:600}
         const [c, t] = celda(r, "variante").split("/").map((x) => x.trim());
         color = color || c; talla = talla || t;
       }
-      lista.push({ codigo, nombre, tipo: celda(r, "tipo"), marca: celda(r, "marca"), color, talla });
+      lista.push({ codigo, sku: celda(r, "sku"), nombre, tipo: celda(r, "tipo"), marca: celda(r, "marca"), color, talla });
     });
     if (!lista.length) throw new Error("El Excel no tiene artículos con código de barras.");
     return lista;
@@ -370,7 +450,8 @@ h2{font-size:1.25rem;font-weight:600}
     lista.sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || a.color.localeCompare(b.color, "es") || num(a.talla) - num(b.talla));
     ARTICULOS = lista;
     porCodigo.clear();
-    ARTICULOS.forEach((a) => porCodigo.set(a.codigo, a));
+    porSku.clear();
+    ARTICULOS.forEach((a) => { porCodigo.set(a.codigo, a); if (a.sku) porSku.set(norm(a.sku), a); });
     // los elegidos que ya no están se quitan
     [...elegidos.keys()].forEach((c) => { if (!porCodigo.has(c)) elegidos.delete(c); });
     // un elegido que cambió en Bsale (nombre, color…) se muestra con los datos nuevos
@@ -378,6 +459,7 @@ h2{font-size:1.25rem;font-weight:600}
     $("#tabla").hidden = false;
     $("#acceso").hidden = true;
     $("#error").hidden = true;
+    $("#respaldo").hidden = true;
     pintar();
   }
 
@@ -395,7 +477,8 @@ h2{font-size:1.25rem;font-weight:600}
       $("#actualizar").hidden = false;
     } catch (err) {
       $("#estado").textContent = ARTICULOS.length ? $("#estado").textContent : "No hay artículos cargados.";
-      mostrarError("No se pudo conectar con Bsale" + (err instanceof TypeError ? " (sin conexión)" : " (" + err.message + ")") + ". Vuelve a intentarlo o importa el Excel de productos.");
+      mostrarError("No se pudo conectar con Bsale" + (err instanceof TypeError ? " (sin conexión)" : " (" + err.message + ")") + ". Vuelve a intentarlo o carga los productos desde un Excel.");
+      $("#respaldo").hidden = false;
     } finally {
       $("#actualizar").disabled = false;
       $("#actualizar").textContent = "Actualizar desde Bsale";
@@ -422,6 +505,7 @@ h2{font-size:1.25rem;font-weight:600}
     desdeBsale("/actualizar", "POST");
   });
 
+  $("#respaldo").addEventListener("click", () => $("#archivo").click());
   $("#archivo").addEventListener("change", async (e) => {
     const archivo = e.target.files && e.target.files[0];
     e.target.value = "";
@@ -439,6 +523,155 @@ h2{font-size:1.25rem;font-weight:600}
     } catch (err) {
       mostrarError((err && err.message) || "No se pudo leer el archivo.");
     }
+  });
+
+  /* ============================================================
+     IMPORTAR ARTÍCULOS (como BoxHero): un Excel con SKU y cantidad
+     -> vista previa -> Siguiente -> quedan elegidos con esas copias.
+     La cantidad es solo el número de etiquetas; no tiene que coincidir con el stock.
+     ============================================================ */
+  let importados = [];              // [{ sku, copias, producto, variante, articulo }]
+
+  function abrirImportar() {
+    $(".app").hidden = true;
+    $("#importar").hidden = false;
+    mostrarPaso("cargar");
+    window.scrollTo(0, 0);
+  }
+  function cerrarImportar() {
+    $("#importar").hidden = true;
+    $(".app").hidden = false;
+  }
+  function mostrarPaso(paso) {
+    $("#paso-cargar").hidden = paso !== "cargar";
+    $("#paso-vista").hidden = paso !== "vista";
+    $("#imp-siguiente").hidden = paso !== "vista";
+    $("#error-imp").hidden = true;
+  }
+  function elegirPestana(cual) {
+    const pegar = cual === "pegar";
+    $("#tab-archivo").setAttribute("aria-selected", String(!pegar));
+    $("#tab-pegar").setAttribute("aria-selected", String(pegar));
+    $("#panel-archivo").hidden = pegar;
+    $("#panel-pegar").hidden = !pegar;
+    $("#error-imp").hidden = true;
+    if (pegar) $("#pegado").focus();
+  }
+  function errorImp(t) { $("#error-imp").textContent = t; $("#error-imp").hidden = false; }
+
+  // Lee filas (de un Excel o de texto pegado). Busca el encabezado "SKU"; la cantidad sale de
+  // "Copias", "Cantidad" o "Stock" (en ese orden). Sin encabezado (solo al pegar): SKU y cantidad.
+  function leerImportacion(filas, permitirSinEncabezado) {
+    let fila = -1, col = {};
+    for (let i = 0; i < Math.min(filas.length, 30); i++) {
+      const h = (filas[i] || []).map(norm);
+      const iSku = h.indexOf("sku");
+      if (iSku >= 0) {
+        fila = i;
+        col.sku = iSku;
+        col.copias = ["copias", "cantidad", "stock"].map((n) => h.indexOf(n)).find((x) => x >= 0);
+        col.producto = h.findIndex((x) => x === "producto" || x.startsWith("nombre producto"));
+        col.variante = h.findIndex((x) => x === "variante");
+        break;
+      }
+    }
+    if (fila < 0) {
+      if (!permitirSinEncabezado) throw new Error("No se encontró la columna \"SKU\" en el archivo.");
+      col = { sku: 0, copias: 1, producto: -1, variante: -1 };
+    }
+    const celda = (r, i) => (i >= 0 && r[i] != null ? String(r[i]).trim() : "");
+    const porFila = new Map();
+    filas.slice(fila + 1).forEach((r) => {
+      if (!r) return;
+      const sku = celda(r, col.sku);
+      if (!sku || norm(sku) === "sku") return;
+      let n = col.copias === undefined ? 1 : parseInt(celda(r, col.copias).replace(/[^\d-]/g, ""), 10);
+      if (!(n > 0)) n = 0;
+      const clave = norm(sku);
+      const previo = porFila.get(clave);
+      if (previo) previo.copias += n;                                  // el mismo SKU repetido se suma
+      else porFila.set(clave, { sku, copias: n, producto: celda(r, col.producto), variante: celda(r, col.variante) });
+    });
+    const lista = [...porFila.values()];
+    if (!lista.length) throw new Error("No se encontraron filas con SKU.");
+    lista.forEach((x) => { x.copias = Math.min(x.copias, 999); x.articulo = porSku.get(norm(x.sku)) || null; });
+    return { lista, sinCantidad: col.copias === undefined };
+  }
+
+  const AVISO = '<svg class="icono-aviso" viewBox="0 0 20 20" aria-label="No está en Bsale" role="img"><path d="M10 2.5 18.5 17h-17Z" fill="currentColor"/><path d="M10 8v4.2M10 14.4v.1" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  function vistaImportacion({ lista, sinCantidad }) {
+    importados = lista;
+    const ok = lista.filter((x) => x.articulo && x.copias > 0);
+    const faltan = lista.filter((x) => !x.articulo);
+    const etiquetas = ok.reduce((s, x) => s + x.copias, 0);
+    $("#filas-imp").innerHTML = lista.map((x) => {
+      const a = x.articulo;
+      if (!a) return `<div class="imp-fila falta">${AVISO}
+        <span class="art"><b>${esc(x.producto || "Artículo desconocido")}</b><span>${x.variante ? esc(x.variante) + " · " : ""}Este SKU no está en Bsale: no se imprimirá</span></span>
+        <span class="sku">${esc(x.sku)}</span><span class="n">${x.copias}</span></div>`;
+      return `<div class="imp-fila${x.copias ? "" : " cero"}"><span></span>
+        <span class="art"><b>${esc(a.nombre)}</b><span>${esc(a.tipo)} / ${esc(a.color)} / Talla ${esc(a.talla)}${x.copias ? "" : " · 0 copias: no se imprimirá"}</span></span>
+        <span class="sku">${esc(x.sku)}</span><span class="n">${x.copias}</span></div>`;
+    }).join("");
+    $("#resumen-imp").innerHTML = `${ok.length} ${ok.length === 1 ? "artículo" : "artículos"}, ${etiquetas} ${etiquetas === 1 ? "etiqueta" : "etiquetas"} listas para agregar.`
+      + (faltan.length ? ` <span class="falta">${faltan.length} ${faltan.length === 1 ? "SKU no está" : "SKU no están"} en Bsale y no se ${faltan.length === 1 ? "imprimirá" : "imprimirán"}.</span>` : "")
+      + (sinCantidad ? " No se encontró columna de cantidad: se usa 1 copia por fila." : "")
+      + (!ARTICULOS.length ? ' <span class="falta">Los artículos de Bsale aún no se han cargado.</span>' : "");
+    $("#imp-siguiente").disabled = !ok.length;
+    mostrarPaso("vista");
+    window.scrollTo(0, 0);
+  }
+
+  async function importarArchivo(archivo) {
+    if (!archivo) return;
+    try {
+      const libro = XLSX.read(await archivo.arrayBuffer(), { type: "array" });
+      let datos = null, ultimo = null;
+      for (const hoja of libro.SheetNames) {
+        try { datos = leerImportacion(XLSX.utils.sheet_to_json(libro.Sheets[hoja], { header: 1, raw: false, defval: null }), false); break; }
+        catch (err) { ultimo = err; }
+      }
+      if (!datos) throw ultimo;
+      vistaImportacion(datos);
+    } catch (err) {
+      errorImp((err && err.message) || "No se pudo leer el archivo.");
+    }
+  }
+
+  $("#abrir-importar").addEventListener("click", abrirImportar);
+  $("#tab-archivo").addEventListener("click", () => elegirPestana("archivo"));
+  $("#tab-pegar").addEventListener("click", () => elegirPestana("pegar"));
+  $("#archivo-imp").addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importarArchivo(f); });
+  const zona = $("#zona");
+  ["dragenter", "dragover"].forEach((t) => zona.addEventListener(t, (e) => { e.preventDefault(); zona.classList.add("encima"); }));
+  ["dragleave", "drop"].forEach((t) => zona.addEventListener(t, () => zona.classList.remove("encima")));
+  zona.addEventListener("drop", (e) => { e.preventDefault(); importarArchivo(e.dataTransfer.files && e.dataTransfer.files[0]); });
+  $("#leer-pegado").addEventListener("click", () => {
+    const filas = $("#pegado").value.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(/\t|;|,/));
+    if (!filas.length) { errorImp("Pega al menos una fila con SKU y cantidad."); return; }
+    try { vistaImportacion(leerImportacion(filas, true)); } catch (err) { errorImp(err.message); }
+  });
+  $("#plantilla").addEventListener("click", () => {
+    const hoja = XLSX.utils.aoa_to_sheet([["SKU", "Cantidad"], ["SKU-A4P3TGZQ", 2]]);
+    hoja["!cols"] = [{ wch: 18 }, { wch: 10 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Etiquetas");
+    XLSX.writeFile(libro, "plantilla-etiquetas.xlsx");
+  });
+  $("#imp-atras").addEventListener("click", () => {
+    if (!$("#paso-vista").hidden) mostrarPaso("cargar"); else cerrarImportar();
+  });
+  $("#imp-siguiente").addEventListener("click", () => {
+    let n = 0, total = 0;
+    importados.forEach((x) => {
+      if (!x.articulo || !x.copias) return;
+      elegidos.set(x.articulo.codigo, Math.min((elegidos.get(x.articulo.codigo) || 0) + x.copias, 999));
+      n++; total += x.copias;
+    });
+    cerrarImportar();
+    pintar();
+    window.scrollTo(0, 0);
+    avisar(`Se agregaron ${n} ${n === 1 ? "artículo" : "artículos"} (${total} ${total === 1 ? "etiqueta" : "etiquetas"}).`);
   });
 
   /* ============================================================
