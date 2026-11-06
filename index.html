@@ -13,8 +13,8 @@
 <style>
 /* ============================================================
    ZAZI — imprimir etiquetas de cajas
-   Etiqueta: copia de la plantilla de BoxHero ("Our", 50 × 30 mm),
-   con las mismas medidas en puntos (142 × 85 pt). Xprinter XP-318B.
+   Etiqueta de 75 × 50 mm: el diseño de la plantilla de BoxHero ("Our", 50 × 30 mm,
+   142 × 85 pt) agrandado ×1,5; lo que sobra de alto se reparte entre las filas.
    Los artículos salen del Excel de productos de Bsale.
    ============================================================ */
 :root{
@@ -46,7 +46,7 @@ h2{font-size:1.25rem;font-weight:600}
 /* Diseño de etiqueta (uno solo, ya elegido) */
 .diseno{display:inline-flex;flex-direction:column;align-items:center;gap:10px}
 .diseno-marco{padding:6px;border:2px solid var(--tinta);border-radius:8px;background:#fff}
-.diseno-marco .et{width:calc(50.09mm * 1.15);height:auto}
+.diseno-marco .et{width:calc(75mm * .77);height:auto}
 .diseno p{font-size:.875rem;text-align:center;line-height:1.35}
 .diseno p span{color:var(--gris)}
 
@@ -101,7 +101,7 @@ h2{font-size:1.25rem;font-weight:600}
 /* Vista previa: las etiquetas una debajo de otra */
 .vista-lista{display:flex;flex-direction:column;align-items:center;gap:20px}
 .vista-item{display:flex;flex-direction:column;align-items:center;gap:6px}
-.vista-item .et{width:calc(50.09mm * 1.8);height:auto;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.vista-item .et{width:calc(75mm * 1.2);height:auto;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.35)}
 .vista-item span{font-size:.8125rem;color:rgba(255,255,255,.85)}
 .vista-vacia{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;color:rgba(255,255,255,.85);font-size:.9375rem;line-height:1.6;padding:0 16px}
 
@@ -145,22 +145,22 @@ h2{font-size:1.25rem;font-weight:600}
   .app{grid-template-columns:1fr}
   .panel{padding:20px 16px 28px}
   .vista{position:static;height:auto;min-height:240px;padding:24px 16px 40px}
-  .vista-item .et{width:min(calc(50.09mm * 1.8),100%)}
+  .vista-item .et{width:min(calc(75mm * 1.2),100%)}
 }
 
 /* ---------- La etiqueta (SVG en puntos, igual que el PDF de BoxHero) ---------- */
-.et{display:block;width:50.09mm;height:29.99mm}
+.et{display:block;width:75mm;height:50mm}
 .et text{font-family:"Roboto",Arial,Helvetica,sans-serif;fill:#000}
 .et .cb{shape-rendering:crispEdges}
 
-/* ---------- Impresión: solo las etiquetas, una por página de 50 × 30 mm ---------- */
+/* ---------- Impresión: solo las etiquetas, una por página de 75 × 50 mm ---------- */
 #hoja{display:none}
-@page{size:142pt 85pt;margin:0}
+@page{size:75mm 50mm;margin:0}
 @media print{
   html,body{margin:0;padding:0;background:#fff;height:auto}
   body>*:not(#hoja){display:none !important}
   #hoja{display:block}
-  #hoja .et{width:142pt;height:85pt;break-after:page;page-break-after:always}
+  #hoja .et{width:75mm;height:50mm;break-after:page;page-break-after:always}
   #hoja .et:last-child{break-after:auto;page-break-after:auto}
 }
 </style>
@@ -178,7 +178,7 @@ h2{font-size:1.25rem;font-weight:600}
       <div class="sec-cab"><h2 id="t-diseno">Diseño de etiqueta</h2></div>
       <div class="diseno">
         <div class="diseno-marco" id="diseno"></div>
-        <p>ZAZI<br><span>Etiqueta térmica, 50 × 30 mm</span></p>
+        <p>ZAZI<br><span>Etiqueta térmica, 75 × 50 mm</span></p>
       </div>
     </section>
 
@@ -223,7 +223,7 @@ h2{font-size:1.25rem;font-weight:600}
 
     <div class="acciones">
       <button class="btn btn-negro" type="button" id="imprimir" disabled>Imprimir</button>
-      <p class="nota">En el cuadro de impresión: papel de 50 × 30 mm, sin márgenes y escala al 100 %.</p>
+      <p class="nota">En el cuadro de impresión: papel de 75 × 50 mm, sin márgenes y escala al 100 %.</p>
     </div>
   </main>
 
@@ -302,7 +302,7 @@ h2{font-size:1.25rem;font-weight:600}
   const elegidos = new Map();       // código de barras -> copias (en el orden en que se agregaron)
 
   /* ============================================================
-     ETIQUETA — medidas tomadas del PDF de BoxHero (en puntos, 142 × 85)
+     ETIQUETA — medidas tomadas del PDF de BoxHero (en puntos, 142 × 85), agrandadas a 75 × 50 mm
      ============================================================ */
   const P = {
     talla:  { x: 2.835,  y: 40.258, f: 37, ancho: 43 },
@@ -317,6 +317,15 @@ h2{font-size:1.25rem;font-weight:600}
     lineaV: { x: 47.116, y1: 2.836, y2: 82.205 },
     barras: { x: 53.148, y: 63.434, ancho: 76.75, alto: 18.769 }
   };
+  // La etiqueta real mide 75 × 50 mm. Se dibuja con 142 unidades de ancho (todo ×1,5 respecto
+  // de BoxHero) y 94,67 de alto: las posiciones verticales se estiran para ocupar los 50 mm,
+  // las letras y anchos no cambian de proporción.
+  const ALTO_U = 142 * 50 / 75, K = ALTO_U / 85;
+  Object.values(P).forEach((p) => {
+    if (Array.isArray(p.y)) p.y = p.y.map((v) => v * K); else if (p.y != null) p.y *= K;
+    if (p.y1 != null) { p.y1 *= K; p.y2 *= K; }
+    if (p.alto) p.alto *= K;
+  });
 
   // Mide el texto con la misma fuente de la etiqueta (Roboto)
   const lienzo = document.createElement("canvas").getContext("2d");
@@ -382,8 +391,8 @@ h2{font-size:1.25rem;font-weight:600}
   const texto = (p, t, f) => `<text x="${p.x}" y="${p.y}" font-size="${f || p.f}">${esc(t)}</text>`;
   function etiqueta(a) {
     const col = filasColor(a.color);
-    return `<svg class="et" viewBox="0 0 142 85" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(a.nombre + ", " + a.color + ", talla " + a.talla)}">
-      <rect width="142" height="85" fill="#fff"/>
+    return `<svg class="et" viewBox="0 0 142 ${ALTO_U.toFixed(3)}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(a.nombre + ", " + a.color + ", talla " + a.talla)}">
+      <rect width="142" height="${ALTO_U.toFixed(3)}" fill="#fff"/>
       ${texto(P.talla, a.talla, letraQueEntra(a.talla, P.talla.f, P.talla.ancho, 12))}
       ${texto(P.tipo, a.tipo, letraQueEntra(a.tipo, P.tipo.f, P.tipo.ancho, 4))}
       ${texto(P.m, "M:")}
@@ -807,7 +816,7 @@ h2{font-size:1.25rem;font-weight:600}
     if (!(parseInt(e.target.value, 10) > 0)) { e.target.value = 1; elegidos.set(c, 1); pintarTotales(); pintarVista(); }
   });
 
-  /* ---------- Imprimir: una página de 50 × 30 mm por etiqueta ---------- */
+  /* ---------- Imprimir: una página de 75 × 50 mm por etiqueta ---------- */
   $("#imprimir").addEventListener("click", () => {
     const partes = [];
     elegidos.forEach((copias, codigo) => {
