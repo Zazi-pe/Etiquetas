@@ -1,51 +1,60 @@
 /* ============================================================
-   ZAZI — puente con Bsale (Cloudflare Worker)
-   Versión 4 (envía también el SKU): guarda una copia del catálogo activo de Bsale y se la da
+   ZAZI — puente con Shopify (Cloudflare Worker)
+   Versión 5: guarda una copia de los artículos activos de Shopify y se la da
    a la página de etiquetas (zazi-pe.github.io/Etiquetas).
-   Solo lectura: no crea ni cambia nada en Bsale.
+   Solo lectura: no crea ni cambia productos en Shopify (solo registra sus propios webhooks).
 
    Configuración en Cloudflare:
-     Secretos  BSALE_TOKEN   access_token de Bsale
-               CLAVE         contraseña para usar este worker
-               WEBHOOK       palabra secreta para la dirección de los webhooks (opcional)
-     Enlace KV CATALOGO      donde se guarda la copia del catálogo
-     Cron      0 8 * * *     actualización completa cada noche (3 a. m. en Lima)
+     Variables  SHOPIFY_TIENDA          dirección .myshopify.com de la tienda (sin https://)
+                SHOPIFY_CLIENT_ID       Client ID de la app "ZAZI etiquetas" (Dev Dashboard)
+     Secretos   SHOPIFY_CLIENT_SECRET   Secret de esa app (también firma los webhooks)
+                CLAVE                   contraseña para usar este worker
+     Enlace KV  CATALOGO                donde se guardan la copia y el token
+     Cron       0 8 * * *               actualización completa cada noche (3 a. m. en Lima)
 
    Direcciones (con la clave en la cabecera X-Clave o en ?clave=):
-     GET  /articulos      el catálogo guardado (si no hay copia o es de más de 24 h, lo descarga)
-     POST /actualizar     descarga el catálogo de nuevo ahora
-     GET  /diagnostico    muestras de cómo vienen los datos
-   Webhooks de Bsale (productos y variantes):
-     POST /bsale/<WEBHOOK>
+     GET  /articulos      la copia guardada (si no hay copia o es de más de 24 h, la descarga)
+     POST /actualizar     descarga todo de nuevo ahora
+     GET  /diagnostico    resumen de la copia y conteos en vivo
+     GET  /webhooks       webhooks registrados;  POST /webhooks  los registra
+   Webhooks de Shopify (productos creados, cambiados o eliminados):
+     POST /shopify/webhook   (firmados por Shopify; se comprueba la firma)
    ============================================================ */
 
-const BSALE = "https://api.bsale.io";
+const VERSION_API = "2026-10";
 const ORIGENES = ["https://zazi-pe.github.io"];      // páginas que pueden pedir el catálogo
-const POR_PAGINA = 50;                               // máximo que permite Bsale
-const A_LA_VEZ = 6;                                  // consultas en paralelo
 const VIGENCIA = 24 * 3600 * 1000;                   // una copia de más de 24 h se renueva
 const CLAVE_KV = "catalogo";
-const FORMATO = 2;                                   // sube cuando cambia lo que se guarda (2 = con SKU)
+const CLAVE_TOKEN = "token-shopify";
+const FORMATO = 3;                                   // sube cuando cambia lo que se guarda (3 = Shopify)
+const TEMAS = ["PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE"];
+const RUTA_WEBHOOK = "/shopify/webhook";
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const cors = cabecerasCors(request);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    if (url.pathname === "/") return texto("ZAZI Bsale: activo.");
+    if (url.pathname === "/") return texto("ZAZI Shopify: activo.");
 
-    // Webhooks de Bsale: la dirección lleva la palabra secreta
-    if (url.pathname.startsWith("/bsale/")) {
-      if (!env.WEBHOOK || url.pathname !== "/bsale/" + env.WEBHOOK || request.method !== "POST") return json({ error: "No existe." }, 404);
+    // Webhooks de Shopify: se comprueba la firma antes de hacer nada
+    if (url.pathname === RUTA_WEBHOOK) {
+      if (request.method !== "POST") return json({ error: "No existe." }, 404);
+      const cuerpo = await request.text();
+      if (!(await firmaValida(env, cuerpo, request.headers.get("X-Shopify-Hmac-Sha256")))) return json({ error: "Firma no válida." }, 401);
+      const tienda = request.headers.get("X-Shopify-Shop-Domain");
+      if (tienda && env.SHOPIFY_TIENDA && tienda !== env.SHOPIFY_TIENDA) return json({ ok: true });   // otra tienda: se ignora
       let aviso = null;
-      try { aviso = await request.json(); } catch (e) { /* cuerpo vacío o mal escrito */ }
-      ctx.waitUntil(procesarWebhook(env, aviso).catch((e) => console.log("webhook", String(e))));
+      try { aviso = JSON.parse(cuerpo); } catch (e) { /* cuerpo vacío o mal escrito */ }
+      const tema = request.headers.get("X-Shopify-Topic") || "";
+      ctx.waitUntil(procesarWebhook(env, tema, aviso).catch((e) => console.log("webhook", String(e))));
       return json({ ok: true });                     // se responde enseguida; el trabajo sigue aparte
     }
 
     const clave = request.headers.get("X-Clave") || url.searchParams.get("clave");
     if (!env.CLAVE || clave !== env.CLAVE) return json({ error: "Clave incorrecta." }, 401, cors);
-    if (!env.BSALE_TOKEN) return json({ error: "Falta el secreto BSALE_TOKEN." }, 500, cors);
+    const falta = ["SHOPIFY_TIENDA", "SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET"].find((n) => !env[n]);
+    if (falta) return json({ error: "Falta la configuración " + falta + "." }, 500, cors);
     if (!env.CATALOGO) return json({ error: "Falta el enlace KV CATALOGO." }, 500, cors);
 
     try {
@@ -58,8 +67,12 @@ export default {
         return json(paraPagina(await descargar(env)), 200, cors);
       }
       if (url.pathname === "/diagnostico") return json(await diagnostico(env), 200, cors);
+      if (url.pathname === "/webhooks") {
+        if (request.method === "POST") return json(await registrarWebhooks(env, url.origin + RUTA_WEBHOOK), 200, cors);
+        return json(await listarWebhooks(env), 200, cors);
+      }
     } catch (e) {
-      return json({ error: "No se pudo leer Bsale: " + String(e.message || e) }, 502, cors);
+      return json({ error: "No se pudo leer Shopify: " + String(e.message || e) }, 502, cors);
     }
     return json({ error: "Esta dirección no existe." }, 404, cors);
   },
@@ -86,120 +99,227 @@ const json = (datos, estado = 200, extra = {}) => new Response(JSON.stringify(da
   status: estado, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...extra }
 });
 const texto = (t) => new Response(t, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* ---------- Bsale ---------- */
-async function bsale(env, ruta) {
-  const r = await fetch(BSALE + ruta, { headers: { access_token: env.BSALE_TOKEN, Accept: "application/json" } });
-  if (!r.ok) throw new Error(`Bsale respondió ${r.status} en ${ruta.split("?")[0]}`);
-  return r.json();
-}
-async function enGrupos(env, rutas) {
-  const salida = [];
-  for (let i = 0; i < rutas.length; i += A_LA_VEZ) salida.push(...await Promise.all(rutas.slice(i, i + A_LA_VEZ).map((r) => bsale(env, r))));
-  return salida;
-}
-const items = (d) => (d && Array.isArray(d.items) ? d.items : []);
-const paginas = (ruta, total) => Array.from({ length: Math.ceil(total / POR_PAGINA) }, (_, i) => `${ruta}&limit=${POR_PAGINA}&offset=${i * POR_PAGINA}`);
+/* ---------- Shopify: token y consultas ----------
+   El token sale de la app (client credentials) y dura 24 h; se guarda en KV para no pedirlo cada vez. */
+let tokenEnMemoria = null;                           // { t, vence } mientras viva esta instancia
 
-/* ---------- El catálogo guardado ----------
-   { v, actualizado, tipos: {id: nombre}, atributos: {id: "color"|"talla"},
-     productos: {id: {n, t}}, articulos: {idVariante: {c, s, p, co, ta}} } */
+async function token(env, nuevo) {
+  const ahora = Date.now();
+  if (!nuevo && tokenEnMemoria && tokenEnMemoria.vence - ahora > 5 * 60 * 1000) return tokenEnMemoria.t;
+  if (!nuevo) {
+    const g = await env.CATALOGO.get(CLAVE_TOKEN, "json");
+    if (g && g.vence - ahora > 5 * 60 * 1000) { tokenEnMemoria = g; return g.t; }
+  }
+  const r = await fetch(`https://${env.SHOPIFY_TIENDA}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: env.SHOPIFY_CLIENT_ID, client_secret: env.SHOPIFY_CLIENT_SECRET })
+  });
+  if (!r.ok) throw new Error(`Shopify no dio el token (${r.status})`);
+  const d = await r.json();
+  const segundos = Number(d.expires_in) || 86399;
+  tokenEnMemoria = { t: d.access_token, vence: ahora + segundos * 1000 };
+  await env.CATALOGO.put(CLAVE_TOKEN, JSON.stringify(tokenEnMemoria), { expirationTtl: Math.max(60, segundos - 600) });
+  return tokenEnMemoria.t;
+}
+
+async function shopify(env, consulta, variables, reintento) {
+  const r = await fetch(`https://${env.SHOPIFY_TIENDA}/admin/api/${VERSION_API}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", "X-Shopify-Access-Token": await token(env, reintento === "token") },
+    body: JSON.stringify({ query: consulta, variables: variables || {} })
+  });
+  if (r.status === 401 && reintento !== "token") return shopify(env, consulta, variables, "token");   // token vencido: otro
+  if (!r.ok) throw new Error(`Shopify respondió ${r.status}`);
+  const d = await r.json();
+  if (d.errors && d.errors.length) {
+    const limite = d.errors.some((e) => e.extensions && e.extensions.code === "THROTTLED");
+    if (limite && reintento !== "limite") { await esperar(2000); return shopify(env, consulta, variables, "limite"); }
+    throw new Error(d.errors.map((e) => e.message).join("; "));
+  }
+  return d.data;
+}
+
+const numero = (gid) => String(gid || "").split("/").pop();   // gid://shopify/Product/123 -> "123"
+
+/* ---------- La copia guardada ----------
+   { v, actualizado, productos: {id: {n, t}}, articulos: {idVariante: {c, s, p, co, ta}} }
+   n = nombre, t = tipo (productType), c = código de barras, s = SKU, p = id del producto, co = color, ta = talla */
 const leer = (env) => env.CATALOGO.get(CLAVE_KV, "json");
 const guardar = (env, c) => env.CATALOGO.put(CLAVE_KV, JSON.stringify(c));
 
-// Lo que recibe la página: una lista lista para buscar (unas 41 consultas a Bsale para armarlo)
+// Lo que recibe la página: la misma lista que con Bsale
 function paraPagina(c) {
   const articulos = [];
   for (const id in c.articulos) {
     const a = c.articulos[id], p = c.productos[a.p];
     if (!p || !a.c) continue;
-    articulos.push({ codigo: a.c, sku: a.s || "", nombre: p.n, tipo: c.tipos[p.t] || "", color: a.co, talla: a.ta });
+    articulos.push({ codigo: a.c, sku: a.s || "", nombre: p.n, tipo: p.t || "", color: a.co, talla: a.ta });
   }
   return { actualizado: c.actualizado, articulos };
 }
 
-// Atributos de una variante -> { color, talla }
-function colorYTalla(c, v) {
-  const r = { color: "", talla: "" };
-  ((v.attribute_values && v.attribute_values.items) || []).forEach((x) => {
-    const tipo = c.atributos[String(x.attribute && x.attribute.id)];
-    if (tipo) r[tipo] = String(x.description || "").trim();
+// Opciones de la variante -> { co, ta }  (se leen por el nombre de la opción: "Color" y "Talla")
+function colorYTalla(opciones) {
+  const r = { co: "", ta: "" };
+  (opciones || []).forEach((o) => {
+    const n = String(o.name || "").trim().toLowerCase();
+    if (n === "color") r.co = String(o.value || "").trim();
+    else if (n === "talla") r.ta = String(o.value || "").trim();
   });
   return r;
 }
-const aArticulo = (c, v) => {
-  const ct = colorYTalla(c, v);
-  return { c: String(v.barCode || "").trim(), s: String(v.code || "").trim(), p: String(v.product && v.product.id), co: ct.color, ta: ct.talla };
-};
+const aProducto = (p) => ({ n: String(p.title || "").trim(), t: String(p.productType || "").trim() });
+const aArticulo = (v, pid, codigo) => ({ c: String(codigo || "").trim(), s: String(v.sku || "").trim(), p: pid, ...colorYTalla(v.selectedOptions) });
 
-/* ---------- Descarga completa ---------- */
+/* ---------- Descarga completa (operación masiva de Shopify) ----------
+   Shopify arma un archivo con todas las variantes activas; se espera a que termine y se lee.
+   Así no importa el límite de costo por consulta. Unas 10 a 40 peticiones en total. */
+const CONSULTA_MASIVA = `{
+  productVariants(query: "product_status:active") {
+    edges { node {
+      id sku
+      selectedOptions { name value }
+      product { id title productType status }
+      barcodes { edges { node { value } } }
+    } }
+  }
+}`;
+
 async function descargar(env) {
-  const c = { v: FORMATO, actualizado: 0, tipos: {}, atributos: {}, productos: {}, articulos: {} };
+  const inicio = await shopify(env, `mutation($q: String!) {
+    bulkOperationRunQuery(query: $q, groupObjects: false) { bulkOperation { id status } userErrors { field message } }
+  }`, { q: CONSULTA_MASIVA });
+  const res = inicio.bulkOperationRunQuery;
+  if (res.userErrors && res.userErrors.length) throw new Error(res.userErrors.map((e) => e.message).join("; "));
+  const id = res.bulkOperation.id;
 
-  items(await bsale(env, "/v1/product_types.json?limit=50")).forEach((t) => { c.tipos[String(t.id)] = t.name; });
-  (await enGrupos(env, Object.keys(c.tipos).map((id) => `/v1/product_types/${id}/attributes.json?limit=50`)))
-    .forEach((d) => items(d).forEach((a) => {
-      const n = String(a.name || "").trim().toLowerCase();
-      if (n === "color" || n === "talla") c.atributos[String(a.id)] = n;
-    }));
+  let op = null;
+  for (let i = 0; i < 40; i++) {                     // hasta ~75 s; normalmente unos segundos
+    await esperar(i < 5 ? 1000 : 2000);
+    op = (await shopify(env, `query($id: ID!) { bulkOperation(id: $id) { status errorCode url } }`, { id })).bulkOperation;
+    if (op && !["CREATED", "RUNNING"].includes(op.status)) break;
+  }
+  if (!op || op.status !== "COMPLETED") throw new Error("La descarga masiva no terminó (" + (op ? op.status + (op.errorCode ? " " + op.errorCode : "") : "sin estado") + ")");
 
-  const nProd = (await bsale(env, "/v1/products/count.json?state=0")).count || 0;
-  (await enGrupos(env, paginas("/v1/products.json?state=0", nProd)))
-    .forEach((d) => items(d).forEach((p) => {
-      c.productos[String(p.id)] = { n: String(p.name || "").trim(), t: String(p.product_type && p.product_type.id || "") };
-    }));
-
-  const nVar = (await bsale(env, "/v1/variants/count.json?state=0")).count || 0;
-  (await enGrupos(env, paginas("/v1/variants.json?state=0&expand=[attribute_values]", nVar)))
-    .forEach((d) => items(d).forEach((v) => { c.articulos[String(v.id)] = aArticulo(c, v); }));
-
+  const c = { v: FORMATO, actualizado: 0, productos: {}, articulos: {} };
+  if (op.url) {                                       // sin url = no hay variantes
+    const r = await fetch(op.url);
+    if (!r.ok) throw new Error(`No se pudo bajar el archivo de Shopify (${r.status})`);
+    leerJsonl(c, await r.text());
+  }
   c.actualizado = Date.now();
   await guardar(env, c);
   return c;
 }
 
-/* ---------- Webhooks: solo se usa el id; los datos se leen de nuevo desde Bsale ---------- */
-async function procesarWebhook(env, aviso) {
-  if (!aviso || !aviso.resourceId || !/^\d+$/.test(String(aviso.resourceId))) return;
-  if (env.CPN_ID && String(aviso.cpnId) !== String(env.CPN_ID)) return;     // solo nuestra empresa
-  const id = String(aviso.resourceId);
-  let c = await leer(env);
-  if (!c || c.v !== FORMATO) { await descargar(env); return; }
+// Cada línea es una variante, o un código de barras con __parentId = la variante a la que pertenece
+function leerJsonl(c, textoJsonl) {
+  const codigos = {};
+  textoJsonl.split("\n").forEach((linea) => {
+    if (!linea.trim()) return;
+    const o = JSON.parse(linea);
+    if (o.__parentId) {
+      const vid = numero(o.__parentId);
+      if (!codigos[vid] && o.value) codigos[vid] = o.value;     // el primer código de la variante
+      return;
+    }
+    if (!o.product || o.product.status !== "ACTIVE") return;
+    const pid = numero(o.product.id);
+    c.productos[pid] = aProducto(o.product);
+    c.articulos[numero(o.id)] = aArticulo(o, pid, "");
+  });
+  for (const vid in codigos) if (c.articulos[vid]) c.articulos[vid].c = String(codigos[vid]).trim();
+}
 
-  if (aviso.topic === "variant") {
-    const v = await bsale(env, `/v1/variants/${id}.json?expand=[attribute_values]`);
-    if (Number(v.state) !== 0) delete c.articulos[id];                         // desactivada
-    else {
-      const pid = String(v.product && v.product.id);
-      if (!c.productos[pid]) {                                               // producto nuevo
-        const p = await bsale(env, `/v1/products/${pid}.json`);
-        c.productos[pid] = { n: String(p.name || "").trim(), t: String(p.product_type && p.product_type.id || "") };
-      }
-      const a = aArticulo(c, v);
-      if (!a.co && !a.ta) { await descargar(env); return; }                  // tipo o atributo nuevo: todo de nuevo
-      c.articulos[id] = a;
+/* ---------- Webhooks: solo se usa el id; el producto se lee de nuevo desde Shopify ---------- */
+async function firmaValida(env, cuerpo, firma) {
+  if (!env.SHOPIFY_CLIENT_SECRET || !firma) return false;
+  const llave = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.SHOPIFY_CLIENT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", llave, new TextEncoder().encode(cuerpo)));
+  const calculada = btoa(String.fromCharCode(...bytes));
+  if (calculada.length !== firma.length) return false;
+  let dif = 0;
+  for (let i = 0; i < calculada.length; i++) dif |= calculada.charCodeAt(i) ^ firma.charCodeAt(i);
+  return dif === 0;
+}
+
+const CONSULTA_PRODUCTO = `query($id: ID!) {
+  product(id: $id) {
+    id title productType status
+    variants(first: 100) {
+      pageInfo { hasNextPage }
+      nodes { id sku selectedOptions { name value } barcodes(first: 1) { nodes { value } } }
     }
-  } else if (aviso.topic === "product") {
-    const p = await bsale(env, `/v1/products/${id}.json`);
-    if (Number(p.state) !== 0) {                                             // producto desactivado: fuera sus variantes
-      delete c.productos[id];
-      for (const k in c.articulos) if (c.articulos[k].p === id) delete c.articulos[k];
-    } else {
-      const t = String(p.product_type && p.product_type.id || "");
-      if (!c.tipos[t]) { await descargar(env); return; }                     // tipo nuevo: todo de nuevo
-      c.productos[id] = { n: String(p.name || "").trim(), t };
+  }
+}`;
+
+async function procesarWebhook(env, tema, aviso) {
+  if (!aviso || !/^\d+$/.test(String(aviso.id || ""))) return;
+  if (!["products/create", "products/update", "products/delete"].includes(tema)) return;
+  const pid = String(aviso.id);
+  const c = await leer(env);
+  if (!c || c.v !== FORMATO) { await descargar(env); return; }
+  const antes = JSON.stringify([c.productos[pid] || null, variantesDe(c, pid)]);
+
+  // Primero se quitan el producto y sus variantes; luego se vuelven a poner si sigue activo
+  delete c.productos[pid];
+  for (const k in c.articulos) if (c.articulos[k].p === pid) delete c.articulos[k];
+
+  if (tema !== "products/delete") {
+    const p = (await shopify(env, CONSULTA_PRODUCTO, { id: "gid://shopify/Product/" + pid })).product;
+    if (p && p.status === "ACTIVE") {
+      if (p.variants.pageInfo.hasNextPage) { await descargar(env); return; }   // más de 100 variantes: todo de nuevo
+      c.productos[pid] = aProducto(p);
+      p.variants.nodes.forEach((v) => {
+        const codigo = v.barcodes && v.barcodes.nodes[0] ? v.barcodes.nodes[0].value : "";
+        c.articulos[numero(v.id)] = aArticulo(v, pid, codigo);
+      });
     }
-  } else return;
+  }
+  // Solo se escribe si cambió algo que importa a las etiquetas (stock y precio no se guardan aquí)
+  if (JSON.stringify([c.productos[pid] || null, variantesDe(c, pid)]) === antes) return;
   await guardar(env, c);
+}
+function variantesDe(c, pid) {
+  return Object.keys(c.articulos).filter((k) => c.articulos[k].p === pid).sort().map((k) => [k, c.articulos[k]]);
+}
+
+/* ---------- /webhooks: ver y registrar los webhooks de la app ---------- */
+async function listarWebhooks(env) {
+  const d = await shopify(env, `{ webhookSubscriptions(first: 50) { nodes { id topic uri } } }`);
+  return { webhooks: d.webhookSubscriptions.nodes.map((w) => ({ tema: w.topic, direccion: w.uri })) };
+}
+async function registrarWebhooks(env, direccion) {
+  const actuales = (await shopify(env, `{ webhookSubscriptions(first: 50) { nodes { topic uri } } }`)).webhookSubscriptions.nodes;
+  const resultado = [];
+  for (const tema of TEMAS) {
+    if (actuales.some((w) => w.topic === tema && w.uri === direccion)) { resultado.push({ tema, estado: "ya estaba" }); continue; }
+    const d = await shopify(env, `mutation($t: WebhookSubscriptionTopic!, $u: String!) {
+      webhookSubscriptionCreate(topic: $t, webhookSubscription: { uri: $u, format: JSON }) { webhookSubscription { id } userErrors { message } }
+    }`, { t: tema, u: direccion });
+    const e = d.webhookSubscriptionCreate.userErrors;
+    resultado.push({ tema, estado: e && e.length ? "error: " + e.map((x) => x.message).join("; ") : "registrado" });
+  }
+  return { direccion, resultado };
 }
 
 /* ---------- /diagnostico ---------- */
 async function diagnostico(env) {
   const c = await leer(env);
+  const d = await shopify(env, `{
+    shop { name }
+    productos: productsCount(query: "status:active") { count }
+    variantes: productVariantsCount(query: "product_status:active") { count }
+    locations(first: 10) { nodes { id name isActive } }
+  }`);
   return {
-    copiaGuardada: c ? { actualizado: new Date(c.actualizado).toISOString(), productos: Object.keys(c.productos).length, variantes: Object.keys(c.articulos).length } : null,
-    cantidadProductos: await bsale(env, "/v1/products/count.json?state=0"),
-    cantidadVariantes: await bsale(env, "/v1/variants/count.json?state=0"),
-    sucursales: items(await bsale(env, "/v1/offices.json")).map((o) => ({ id: o.id, nombre: o.name }))
+    copiaGuardada: c && c.v === FORMATO ? { actualizado: new Date(c.actualizado).toISOString(), productos: Object.keys(c.productos).length, variantes: Object.keys(c.articulos).length } : null,
+    tienda: d.shop.name,
+    productosActivos: d.productos.count,
+    variantesActivas: d.variantes.count,
+    ubicaciones: d.locations.nodes.map((l) => ({ id: numero(l.id), nombre: l.name, activa: l.isActive }))
   };
 }
