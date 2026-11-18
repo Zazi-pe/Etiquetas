@@ -313,13 +313,11 @@ async function diagnostico(env) {
     shop { name }
     productos: productsCount(query: "status:active") { count }
     variantes: productVariantsCount(query: "product_status:active") { count }
-    locations(first: 10) { nodes { id name isActive } }
   }`);
   return {
     copiaGuardada: c && c.v === FORMATO ? { actualizado: new Date(c.actualizado).toISOString(), productos: Object.keys(c.productos).length, variantes: Object.keys(c.articulos).length } : null,
     tienda: d.shop.name,
     productosActivos: d.productos.count,
-    variantesActivas: d.variantes.count,
-    ubicaciones: d.locations.nodes.map((l) => ({ id: numero(l.id), nombre: l.name, activa: l.isActive }))
+    variantesActivas: d.variantes.count
   };
 }
