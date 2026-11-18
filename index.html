@@ -192,8 +192,8 @@ h2{font-size:1.25rem;font-weight:600}
         <input class="sr" id="archivo" type="file" accept=".xlsx,.xls,.csv" tabindex="-1" aria-hidden="true">
       </div>
       <div class="origen">
-        <p class="nota" id="estado" aria-live="polite">Cargando artículos de Bsale…</p>
-        <button class="lnk" type="button" id="actualizar" hidden>Actualizar desde Bsale</button>
+        <p class="nota" id="estado" aria-live="polite">Cargando artículos de Shopify…</p>
+        <button class="lnk" type="button" id="actualizar" hidden>Actualizar desde Shopify</button>
         <button class="lnk" type="button" id="respaldo" hidden>Cargar productos desde un Excel (sin conexión)</button>
       </div>
       <form class="acceso" id="acceso" hidden>
@@ -202,7 +202,7 @@ h2{font-size:1.25rem;font-weight:600}
           <input class="input" id="clave" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
           <button class="btn btn-negro" type="submit">Entrar</button>
         </div>
-        <p class="nota">Es la clave del puente con Bsale. Se guarda solo en este dispositivo.</p>
+        <p class="nota">Es la clave del puente con Shopify. Se guarda solo en este dispositivo.</p>
       </form>
       <p class="error" id="error" role="alert" hidden></p>
 
@@ -289,8 +289,8 @@ h2{font-size:1.25rem;font-weight:600}
   const esc = (t) => String(t == null ? "" : t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const norm = (t) => String(t == null ? "" : t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
-  /* ---------- Conexión con Bsale (worker de Cloudflare) ---------- */
-  const WORKER = "https://zazi-bsale.stefanoportalatinotapia.workers.dev";
+  /* ---------- Conexión con Shopify (worker de Cloudflare) ---------- */
+  const WORKER = "https://zazi-shopify.stefanoportalatinotapia.workers.dev";
   const CLAVE_LOCAL = "zazi-etiquetas-clave";
   let clave = "";
   try { clave = localStorage.getItem(CLAVE_LOCAL) || ""; } catch (e) { /* sin almacenamiento */ }
@@ -448,7 +448,7 @@ h2{font-size:1.25rem;font-weight:600}
     return lista;
   }
 
-  // Deja la lista lista para buscar (sirve para Bsale y para el Excel)
+  // Deja la lista lista para buscar (sirve para Shopify y para el Excel)
   function usarArticulos(lista, estado) {
     lista.forEach((a) => {
       a.marca = a.marca || "";
@@ -463,7 +463,7 @@ h2{font-size:1.25rem;font-weight:600}
     ARTICULOS.forEach((a) => { porCodigo.set(a.codigo, a); if (a.sku) porSku.set(norm(a.sku), a); });
     // los elegidos que ya no están se quitan
     [...elegidos.keys()].forEach((c) => { if (!porCodigo.has(c)) elegidos.delete(c); });
-    // un elegido que cambió en Bsale (nombre, color…) se muestra con los datos nuevos
+    // un elegido que cambió en Shopify (nombre, color…) se muestra con los datos nuevos
     $("#estado").textContent = estado;
     $("#tabla").hidden = false;
     $("#acceso").hidden = true;
@@ -472,9 +472,9 @@ h2{font-size:1.25rem;font-weight:600}
     pintar();
   }
 
-  /* ---------- Artículos desde Bsale ---------- */
+  /* ---------- Artículos desde Shopify ---------- */
   const fechaLima = (ms) => new Date(ms).toLocaleString("es-PE", { timeZone: "America/Lima", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  async function desdeBsale(ruta, metodo) {
+  async function desdeShopify(ruta, metodo) {
     if (!clave) { pedirClave(); return; }
     $("#actualizar").disabled = true;
     try {
@@ -482,20 +482,20 @@ h2{font-size:1.25rem;font-weight:600}
       if (r.status === 401) { clave = ""; try { localStorage.removeItem(CLAVE_LOCAL); } catch (e) {} pedirClave("La clave no es correcta."); return; }
       const datos = await r.json().catch(() => ({}));
       if (!r.ok || !Array.isArray(datos.articulos)) throw new Error(datos.error || "Error " + r.status);
-      usarArticulos(datos.articulos, `${datos.articulos.length.toLocaleString("es-PE")} artículos de Bsale, actualizados el ${fechaLima(datos.actualizado)}`);
+      usarArticulos(datos.articulos, `${datos.articulos.length.toLocaleString("es-PE")} artículos de Shopify, actualizados el ${fechaLima(datos.actualizado)}`);
       $("#actualizar").hidden = false;
     } catch (err) {
       $("#estado").textContent = ARTICULOS.length ? $("#estado").textContent : "No hay artículos cargados.";
-      mostrarError("No se pudo conectar con Bsale" + (err instanceof TypeError ? " (sin conexión)" : " (" + err.message + ")") + ". Vuelve a intentarlo o carga los productos desde un Excel.");
+      mostrarError("No se pudo conectar con Shopify" + (err instanceof TypeError ? " (sin conexión)" : " (" + err.message + ")") + ". Vuelve a intentarlo o carga los productos desde un Excel.");
       $("#respaldo").hidden = false;
     } finally {
       $("#actualizar").disabled = false;
-      $("#actualizar").textContent = "Actualizar desde Bsale";
+      $("#actualizar").textContent = "Actualizar desde Shopify";
     }
   }
   function pedirClave(error) {
     $("#acceso").hidden = false;
-    $("#estado").textContent = "Escribe la clave para cargar los artículos de Bsale.";
+    $("#estado").textContent = "Escribe la clave para cargar los artículos de Shopify.";
     if (error) mostrarError(error); else $("#error").hidden = true;
     $("#clave").focus();
   }
@@ -506,12 +506,12 @@ h2{font-size:1.25rem;font-weight:600}
     if (!clave) return;
     try { localStorage.setItem(CLAVE_LOCAL, clave); } catch (err) { /* sin almacenamiento */ }
     $("#clave").value = "";
-    $("#estado").textContent = "Cargando artículos de Bsale…";
-    desdeBsale("/articulos");
+    $("#estado").textContent = "Cargando artículos de Shopify…";
+    desdeShopify("/articulos");
   });
   $("#actualizar").addEventListener("click", () => {
     $("#actualizar").textContent = "Actualizando…";
-    desdeBsale("/actualizar", "POST");
+    desdeShopify("/actualizar", "POST");
   });
 
   $("#respaldo").addEventListener("click", () => $("#archivo").click());
@@ -607,7 +607,7 @@ h2{font-size:1.25rem;font-weight:600}
     return { lista, sinCantidad: col.copias === undefined };
   }
 
-  const AVISO = '<svg class="icono-aviso" viewBox="0 0 20 20" aria-label="No está en Bsale" role="img"><path d="M10 2.5 18.5 17h-17Z" fill="currentColor"/><path d="M10 8v4.2M10 14.4v.1" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  const AVISO = '<svg class="icono-aviso" viewBox="0 0 20 20" aria-label="No está en Shopify" role="img"><path d="M10 2.5 18.5 17h-17Z" fill="currentColor"/><path d="M10 8v4.2M10 14.4v.1" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>';
   function vistaImportacion({ lista, sinCantidad }) {
     importados = lista;
     const ok = lista.filter((x) => x.articulo && x.copias > 0);
@@ -616,16 +616,16 @@ h2{font-size:1.25rem;font-weight:600}
     $("#filas-imp").innerHTML = lista.map((x) => {
       const a = x.articulo;
       if (!a) return `<div class="imp-fila falta">${AVISO}
-        <span class="art"><b>${esc(x.producto || "Artículo desconocido")}</b><span>${x.variante ? esc(x.variante) + " · " : ""}Este SKU no está en Bsale: no se imprimirá</span></span>
+        <span class="art"><b>${esc(x.producto || "Artículo desconocido")}</b><span>${x.variante ? esc(x.variante) + " · " : ""}Este SKU no está en Shopify: no se imprimirá</span></span>
         <span class="sku">${esc(x.sku)}</span><span class="n">${x.copias}</span></div>`;
       return `<div class="imp-fila${x.copias ? "" : " cero"}"><span></span>
         <span class="art"><b>${esc(a.nombre)}</b><span>${esc(a.tipo)} / ${esc(a.color)} / Talla ${esc(a.talla)}${x.copias ? "" : " · 0 copias: no se imprimirá"}</span></span>
         <span class="sku">${esc(x.sku)}</span><span class="n">${x.copias}</span></div>`;
     }).join("");
     $("#resumen-imp").innerHTML = `${ok.length} ${ok.length === 1 ? "artículo" : "artículos"}, ${etiquetas} ${etiquetas === 1 ? "etiqueta" : "etiquetas"} listas para agregar.`
-      + (faltan.length ? ` <span class="falta">${faltan.length} ${faltan.length === 1 ? "SKU no está" : "SKU no están"} en Bsale y no se ${faltan.length === 1 ? "imprimirá" : "imprimirán"}.</span>` : "")
+      + (faltan.length ? ` <span class="falta">${faltan.length} ${faltan.length === 1 ? "SKU no está" : "SKU no están"} en Shopify y no se ${faltan.length === 1 ? "imprimirá" : "imprimirán"}.</span>` : "")
       + (sinCantidad ? " No se encontró columna de cantidad: se usa 1 copia por fila." : "")
-      + (!ARTICULOS.length ? ' <span class="falta">Los artículos de Bsale aún no se han cargado.</span>' : "");
+      + (!ARTICULOS.length ? ' <span class="falta">Los artículos de Shopify aún no se han cargado.</span>' : "");
     $("#imp-siguiente").disabled = !ok.length;
     mostrarPaso("vista");
     window.scrollTo(0, 0);
@@ -793,7 +793,7 @@ h2{font-size:1.25rem;font-weight:600}
   }
   function pintarVista() {
     $("#vista").innerHTML = !elegidos.size
-      ? `<p class="vista-vacia">${ARTICULOS.length ? "Busca un artículo y agrégalo para ver aquí sus etiquetas." : "Cuando carguen los artículos de Bsale, búscalos y agrégalos para ver aquí sus etiquetas."}</p>`
+      ? `<p class="vista-vacia">${ARTICULOS.length ? "Busca un artículo y agrégalo para ver aquí sus etiquetas." : "Cuando carguen los artículos de Shopify, búscalos y agrégalos para ver aquí sus etiquetas."}</p>`
       : [...elegidos.entries()].map(([codigo, copias]) => `<div class="vista-item">${etiqueta(porCodigo.get(codigo))}<span>${copias === 1 ? "1 copia" : copias + " copias"}</span></div>`).join("");
     const primero = elegidos.size ? porCodigo.get([...elegidos.keys()][0]) : null;
     $("#diseno").innerHTML = etiqueta(primero || EJEMPLO);
@@ -842,7 +842,7 @@ h2{font-size:1.25rem;font-weight:600}
 
   /* ---------- Arranque: espera la fuente Roboto para medir bien los textos ---------- */
   pintarVista();
-  desdeBsale("/articulos");
+  desdeShopify("/articulos");
   if (document.fonts && document.fonts.load) {
     document.fonts.load("400 20px Roboto").then(() => { cacheBarras.clear(); pintar(); }).catch(() => {});
   }
