@@ -63,7 +63,8 @@ Only the product `id` from the notice is used; the product is always re-read fro
 ## Creating models (`POST /crear`)
 Body: `{ modelos: [{ nombre, tipo, marca, variantes: [{ color, talla, codigo, sku, stock, costo, precio }] }] }`
 (one variant per color + size; `costo` without IGV; `precio` is the sale price). Answer:
-`{ resultados: [{ nombre, ok, errores, avisos, articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] }`.
+`{ resultados: [{ nombre, ok, producto, errores, avisos, articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] }`
+(`producto` = numeric Shopify id of the created product, used to connect it in the catalog).
 - **Checks (errors skip that model, the rest go on):** name and type required; color, size and price > 0 per row;
   stock a whole number ≥ 0 (empty = 0); no repeated color + size; a given barcode or SKU must not exist in the
   saved copy, earlier in the same call, or in another row of the model; **a model that already exists is never

@@ -301,7 +301,8 @@ function variantesDe(c, pid) {
    Recibe { modelos: [{ nombre, tipo, marca, variantes: [{ color, talla, codigo, sku, stock, costo, precio }] }] }
    (una variante por color y talla). Un modelo que ya existe en Shopify NO se toca: se devuelve como error.
    Código de barras vacío: se genera un EAN-13 que empieza con 20. SKU vacío: igual al código de barras.
-   Devuelve { resultados: [{ nombre, ok, errores, avisos, articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] } */
+   Devuelve { resultados: [{ nombre, ok, producto, errores, avisos, articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] }
+   (producto = id numérico del producto creado en Shopify) */
 const MAX_MODELOS = 10;                              // por pedido (límite de consultas del plan gratis de Cloudflare)
 const nrm = (t) => String(t == null ? "" : t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 const textoDe = (t) => String(t == null ? "" : t).trim();
@@ -444,6 +445,7 @@ async function crear(env, cuerpo) {
 
     // Se agrega a la copia (así las etiquetas lo ven enseguida y no se puede crear dos veces)
     const pid = numero(p.id);
+    res.producto = pid;                              // id del producto en Shopify (para conectarlo al catálogo)
     c.productos[pid] = aProducto(p);
     const stockDe = new Map(variantes.map((v) => [nrm(v.color) + "|" + nrm(v.talla), v.stock]));
     p.variants.nodes.forEach((v) => {

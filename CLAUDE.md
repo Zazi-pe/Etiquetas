@@ -31,7 +31,7 @@ Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html` with two
 - Brand names are skipped for now ("M:" prints empty). Type text (Shopify product type) and product names print exactly as in Shopify.
 - Always read color and size from the variant options ("Color", "Talla"), never by parsing the variant title.
 - Printing uses `@page { size: 75mm 50mm; margin: 0 }`. On a new PC or printer, a 75 × 50 mm custom paper must be created in the printer driver.
-- **Nuevos modelos:** one row per color and size (Bsale-style sheet; Bsale's template also works). Empty barcode/SKU → generated; filled → used as given. Empty stock → 0. Costo without IGV. **A model that already exists in Shopify is an error and is never modified**; adding stock to existing models will be a separate tool. Read Excel cells raw so long numeric codes stay exact.
+- **Nuevos modelos:** one row per color and size (Bsale-style sheet; Bsale's template also works). Empty barcode/SKU → generated; filled → used as given. Empty stock → 0. Costo without IGV. Optionally the created models go to a catalog's `pendientes.json` (one per model + color, written with the admin's GitHub token) for the catalog admin to publish with photo and swatch. **A model that already exists in Shopify is an error and is never modified**; adding stock to existing models will be a separate tool. Read Excel cells raw so long numeric codes stay exact.
 
 ## Critical rules
 - **Never write token, key or secret values (SHOPIFY_CLIENT_SECRET, CLAVE) into any file.** The repo is public.

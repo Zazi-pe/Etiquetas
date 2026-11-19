@@ -166,6 +166,15 @@ h2{font-size:1.25rem;font-weight:600}
 .nm-color .nm-der{text-align:right;color:var(--gris);white-space:nowrap}
 .nm-codigos{font:400 .8125rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gris);grid-column:1 / -1}
 #nuevos .imp-acciones{flex-wrap:wrap}
+.nm-catalogo{display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--piedra);border-radius:8px}
+.nm-check{display:flex;align-items:center;gap:10px;font-weight:600}
+.nm-check input,.nm-cats input{width:20px;height:20px;accent-color:#000;flex:none}
+.nm-cats{display:flex;flex-wrap:wrap;gap:8px 22px}
+.nm-cats label{display:flex;align-items:center;gap:8px;font-weight:500}
+.nm-linea{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:.875rem;font-weight:600}
+.nm-linea select{min-height:38px;padding:0 10px;border:1px solid var(--linea);border-radius:var(--r);background:#fff;font:inherit;font-weight:500}
+.nm-token{display:flex;flex-direction:column;gap:6px}
+.nm-token .acceso-fila .input{min-height:42px}
 
 /* Celular y tablet: una columna, la vista previa abajo */
 @media (max-width:900px){
@@ -334,12 +343,30 @@ h2{font-size:1.25rem;font-weight:600}
   <div id="nm-vista" class="panel-imp" style="align-items:stretch" hidden>
     <p class="imp-resumen" id="nm-resumen" aria-live="polite"></p>
     <div id="nm-modelos" class="panel-imp" style="align-items:stretch;gap:12px"></div>
+    <div class="nm-catalogo" id="nm-catalogo">
+      <label class="nm-check"><input type="checkbox" id="nm-al-catalogo"> Agregar también al catálogo</label>
+      <div id="nm-cat-opciones" class="panel-imp" style="gap:12px" hidden>
+        <div class="nm-cats" role="radiogroup" aria-label="Catálogo">
+          <label><input type="radio" name="nm-cat" value="Zazi"> Zazi</label>
+          <label><input type="radio" name="nm-cat" value="Zazi-Modelos"> Zazi-Modelos</label>
+        </div>
+        <form class="nm-token" id="nm-token" hidden>
+          <label for="nm-token-in"><b>Token de GitHub</b> (el mismo del admin del catálogo)</label>
+          <div class="acceso-fila">
+            <input class="input" id="nm-token-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
+            <button class="btn btn-negro" type="submit">Usar</button>
+          </div>
+        </form>
+        <p class="nota" id="nm-cat-estado"></p>
+      </div>
+    </div>
   </div>
 
   <div class="imp-acciones">
     <button class="btn" type="button" id="nm-atras" hidden>Atrás</button>
     <button class="btn btn-negro" type="button" id="nm-crear" hidden>Crear en Shopify</button>
     <button class="btn btn-negro" type="button" id="nm-etiquetas" hidden>Imprimir etiquetas</button>
+    <button class="btn btn-negro" type="button" id="nm-reintentar" hidden>Reintentar guardar en el catálogo</button>
     <button class="btn" type="button" id="nm-otro" hidden>Cargar otro Excel</button>
   </div>
 </section>
@@ -935,6 +962,151 @@ h2{font-size:1.25rem;font-weight:600}
   let nmCreados = [];               // artículos creados (para imprimir sus etiquetas)
   let nmEjemplos = 0;               // filas de ejemplo que se saltaron
 
+  /* ---------- Agregar también al catálogo (Zazi o Zazi-Modelos) como pendientes ----------
+     Se guardan en pendientes.json del repositorio del catálogo, uno por modelo + color, ya conectados a Shopify.
+     En el admin del catálogo se les pone foto y cuadrito de color y se publican. Usa el token de GitHub del admin. */
+  const CLAVE_GITHUB = "zazi-admin-token";                 // la misma que guarda admin.html (mismo sitio)
+  let tokenGithub = "";
+  try { tokenGithub = localStorage.getItem(CLAVE_GITHUB) || ""; } catch (e) { /* sin almacenamiento */ }
+  let nmCat = null;                 // { repo, filtros, productos, pendientes } del catálogo elegido
+  let nmPorGuardar = [];            // pendientes que aún no se pudieron guardar (para Reintentar)
+  const slugLinea = (t) => norm(t).replace(/[^a-z0-9]/g, "");
+
+  async function github(repo, ruta, opciones = {}) {
+    const r = await fetch("https://api.github.com/repos/Zazi-pe/" + repo + ruta, { ...opciones, cache: "no-store",
+      headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tokenGithub, "X-GitHub-Api-Version": "2022-11-28", ...(opciones.body ? { "Content-Type": "application/json" } : {}) } });
+    if (!r.ok) { const e = new Error("GitHub " + r.status); e.status = r.status; throw e; }
+    return r.json();
+  }
+  const deB64 = (b) => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+  const aB64 = (t) => { let s = ""; new TextEncoder().encode(t).forEach((b) => { s += String.fromCharCode(b); }); return btoa(s); };
+  async function leerJsonRepo(repo, archivo) {
+    try { const d = await github(repo, "/contents/" + archivo + "?ref=main"); return { datos: JSON.parse(deB64(d.content)), sha: d.sha }; }
+    catch (e) { if (e.status === 404) return { datos: null, sha: null }; throw e; }
+  }
+
+  function catElegido() { const r = $("input[name=nm-cat]:checked"); return r ? r.value : ""; }
+  function pintarCatalogo() {
+    const activo = $("#nm-al-catalogo").checked, repo = catElegido();
+    $("#nm-cat-opciones").hidden = !activo;
+    $("#nm-token").hidden = !(activo && repo && !tokenGithub);
+    let t = "";
+    if (activo && !repo) t = "Elige en qué catálogo agregarlos.";
+    else if (activo && !tokenGithub) t = "Este navegador aún no tiene el token del admin. Pégalo una vez y queda guardado.";
+    else if (activo && (!nmCat || nmCat.repo !== repo)) t = "Cargando " + repo + "…";
+    else if (activo) t = "Se agregarán a Pendientes de " + repo + " (" + plural(nmCat.productos.length, "producto publicado", "productos publicados") + ", " + plural(nmCat.pendientes.length, "pendiente", "pendientes") + "). Allí se les pone foto y color y se publican.";
+    $("#nm-cat-estado").textContent = t;
+    const listo = !activo || (nmCat && nmCat.repo === repo);
+    const buenos = nmModelos.filter((m) => !m.errores.length).length;
+    $("#nm-crear").disabled = !buenos || !listo;
+  }
+  async function cargarCatalogo() {
+    const repo = catElegido();
+    if (!$("#nm-al-catalogo").checked || !repo || !tokenGithub) { pintarCatalogo(); return; }
+    if (nmCat && nmCat.repo === repo) { pintarVistaNuevos(); return; }
+    nmCat = null; pintarCatalogo();
+    try {
+      const [prod, pend] = await Promise.all([leerJsonRepo(repo, "productos.json"), leerJsonRepo(repo, "pendientes.json")]);
+      if (catElegido() !== repo) return;
+      nmCat = { repo, filtros: (prod.datos && prod.datos.filtros) || [], productos: (prod.datos && prod.datos.productos) || [],
+        pendientes: (pend.datos && pend.datos.pendientes) || [] };
+      nmModelos.forEach((m) => { m.linea = null; });          // se vuelve a proponer la línea para este catálogo
+      pintarVistaNuevos();
+    } catch (e) {
+      if (e.status === 401) { tokenGithub = ""; try { localStorage.removeItem(CLAVE_GITHUB); } catch (_) {} }
+      pintarCatalogo();
+      $("#nm-cat-estado").textContent = e.status === 401 ? "El token de GitHub no es válido o venció. Pega uno nuevo."
+        : e.status === 403 || e.status === 404 ? "Este token no tiene acceso a " + repo + "."
+        : "No se pudo leer " + repo + ". Revisa tu conexión.";
+    }
+  }
+  // Línea propuesta: en Zazi por la marca (You, I-RUN…); en Zazi-Modelos por el tipo (Botines, Zapatillas…)
+  function lineaPropuesta(m) {
+    // la primera que tenga valor (marca en Zazi, tipo en Modelos); si no existe esa línea, se propone nueva
+    const t = (nmCat.repo === "Zazi" ? [m.marca, m.tipo] : [m.tipo, m.marca]).find(Boolean) || "Otros";
+    const f = nmCat.filtros.find(([k, n]) => k === slugLinea(t) || norm(n) === norm(t));
+    return f ? { filtro: f[0], linea: f[1] } : { filtro: slugLinea(t) || "otros", linea: t };
+  }
+  function selectorLinea(m, i) {
+    if (!m.linea) m.linea = lineaPropuesta(m);
+    const existe = nmCat.filtros.some(([k]) => k === m.linea.filtro);
+    const opciones = nmCat.filtros.map(([k, n]) => `<option value="${esc(k)}"${k === m.linea.filtro ? " selected" : ""}>${esc(n)}</option>`).join("")
+      + (existe ? "" : `<option value="${esc(m.linea.filtro)}" selected>Nueva: ${esc(m.linea.linea)}</option>`);
+    return `<label class="nm-linea">${nmCat.repo === "Zazi" ? "Línea" : "Categoría"} en ${esc(nmCat.repo)}: <select data-linea="${i}">${opciones}</select></label>`;
+  }
+
+  // Un pendiente por modelo + color, ya conectado a Shopify. Precio, tallas y agotadas son solo de respaldo.
+  function pendientesDe(resultados) {
+    const hoyLima = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date());
+    const salida = [];
+    resultados.filter((r) => r.ok).forEach((r) => {
+      const m = nmModelos.find((x) => norm(x.nombre) === norm(r.nombre));
+      if (!m || !m.linea) return;
+      porColor(r.articulos).forEach(([color, as]) => {
+        const vs = m.variantes.filter((v) => norm(v.color) === norm(color));
+        const precios = vs.map((v) => v.precio).filter((x) => x > 0);
+        const tallas = as.map((a) => a.talla);
+        const nums = tallas.map(Number);
+        const rango = tallas.length > 1 && nums.every((n, i) => Number.isInteger(n) && (i === 0 || n === nums[i - 1] + 1));
+        const agotadas = as.filter((a) => !(a.stock > 0)).map((a) => String(a.talla));
+        salida.push({
+          shopify: { ...(r.producto ? { id: String(r.producto) } : {}), color, sku: as[0].sku },
+          filtro: m.linea.filtro, linea: m.linea.linea,
+          nombre: r.nombre + " " + color, modelo: r.nombre, color,
+          precio: precios.length ? Math.min(...precios) : null,
+          tallas: rango ? [nums[0], nums[nums.length - 1]] : tallas,
+          ...(agotadas.length ? { agotadas } : {}),
+          agregado: hoyLima
+        });
+      });
+    });
+    return salida;
+  }
+  // Se leen los archivos de nuevo justo antes de guardar, para no pisar cambios de otro lado
+  async function guardarPendientes(repo, nuevos) {
+    for (let intento = 0; intento < 2; intento++) {
+      const [prod, pend] = await Promise.all([leerJsonRepo(repo, "productos.json"), leerJsonRepo(repo, "pendientes.json")]);
+      const productos = (prod.datos && prod.datos.productos) || [];
+      const actuales = (pend.datos && pend.datos.pendientes) || [];
+      const mismo = (a, b) => (a.shopify && b.shopify && a.shopify.id && a.shopify.id === b.shopify.id && norm(a.shopify.color) === norm(b.shopify.color)) || norm(a.nombre) === norm(b.nombre);
+      const agregar = [], saltados = [];
+      nuevos.forEach((x) => { if (productos.some((p) => mismo(p, x)) || actuales.some((p) => mismo(p, x))) saltados.push(x.nombre); else agregar.push(x); });
+      if (!agregar.length) return { agregados: 0, saltados };
+      const lista = actuales.concat(agregar);
+      const texto = "{\n  \"pendientes\": [\n" + lista.map((p) => "    " + JSON.stringify(p)).join(",\n") + "\n  ]\n}\n";
+      try {
+        await github(repo, "/contents/pendientes.json", { method: "PUT", body: JSON.stringify({
+          message: "Pendientes: " + plural(agregar.length, "producto", "productos") + " desde Nuevos modelos\n\n" + agregar.map((x) => "- " + x.nombre).join("\n"),
+          content: aB64(texto), branch: "main", ...(pend.sha ? { sha: pend.sha } : {}) }) });
+        return { agregados: agregar.length, saltados };
+      } catch (e) {
+        if (intento === 0 && (e.status === 409 || e.status === 422)) continue;   // cambió mientras tanto: se lee de nuevo
+        throw e;
+      }
+    }
+  }
+  async function enviarPendientes() {
+    if (!nmPorGuardar.length || !nmCat) return;
+    const repo = nmCat.repo;
+    $("#nm-reintentar").hidden = true;
+    const linea = document.createElement("p");
+    try {
+      const r = await guardarPendientes(repo, nmPorGuardar);
+      nmPorGuardar = [];
+      linea.className = "imp-resumen";
+      linea.textContent = (r.agregados ? plural(r.agregados, "producto agregado", "productos agregados") + " a Pendientes de " + repo + ". Ábrelos en su admin para ponerles foto y color, y publicarlos." : "No se agregó nada al catálogo.")
+        + (r.saltados.length ? " Ya estaban en el catálogo: " + r.saltados.join(", ") + "." : "");
+    } catch (e) {
+      linea.className = "imp-resumen falta";
+      linea.style.color = "var(--alerta)";
+      linea.textContent = "Los modelos se crearon en Shopify, pero no se pudieron agregar a " + repo + (e.status ? " (GitHub " + e.status + ")" : " (sin conexión)") + ". Toca Reintentar.";
+      $("#nm-reintentar").hidden = false;
+    }
+    const previa = $("#nm-cat-resultado"); if (previa) previa.remove();
+    linea.id = "nm-cat-resultado";
+    $("#nm-resumen").after(linea);
+  }
+
   function pintarEstadoNuevos() {
     const listo = deShopify && ARTICULOS.length > 0;
     $("#nm-estado").textContent = listo
@@ -950,6 +1122,7 @@ h2{font-size:1.25rem;font-weight:600}
     $("#nm-crear").hidden = paso !== "vista";
     $("#nm-etiquetas").hidden = paso !== "resultado";
     $("#nm-otro").hidden = paso !== "resultado";
+    if (paso !== "resultado") $("#nm-reintentar").hidden = true;
     if (paso !== "vista") $("#nm-error").hidden = true;
     window.scrollTo(0, 0);
   }
@@ -1084,11 +1257,14 @@ h2{font-size:1.25rem;font-weight:600}
           <span class="nm-tallas">${vs.map((v) => esc(v.talla || "?") + " (" + (Number.isInteger(v.stock) ? v.stock : "?") + ")").join(" · ")}</span>
           <span class="nm-der">${precioTxt(vs)}</span></div>`).join("")}</div>
         <span class="nota">${!propios ? "Los códigos de barras y SKU se generan al crear." : plural(propios, "fila trae", "filas traen") + " sus propios códigos" + (propios === m.variantes.length ? "." : "; los demás se generan al crear.")}</span>
+        ${!m.errores.length && $("#nm-al-catalogo").checked && nmCat && nmCat.repo === catElegido() ? selectorLinea(m, nmModelos.indexOf(m)) : ""}
       </div>`;
     }).join("");
+    $("#nm-catalogo").hidden = !buenos.length;
     $("#nm-crear").disabled = !buenos.length;
     $("#nm-crear").textContent = buenos.length ? "Crear en Shopify (" + plural(buenos.length, "modelo", "modelos") + ")" : "Crear en Shopify";
     nmPaso("vista");
+    pintarCatalogo();
   }
 
   async function cargarNuevos(archivo) {
@@ -1135,7 +1311,15 @@ h2{font-size:1.25rem;font-weight:600}
       }
     }
     boton.disabled = false; $("#nm-atras").disabled = false;
+    const alCatalogo = $("#nm-al-catalogo").checked && nmCat;
+    nmPorGuardar = alCatalogo ? pendientesDe(resultados) : [];
     mostrarResultado(resultados, fallo);
+    if (nmPorGuardar.length) {
+      const aviso = document.createElement("p");
+      aviso.id = "nm-cat-resultado"; aviso.className = "imp-resumen"; aviso.textContent = "Agregando a Pendientes de " + nmCat.repo + "…";
+      $("#nm-resumen").after(aviso);
+      await enviarPendientes();
+    }
   }
 
   function mostrarResultado(resultados, fallo) {
@@ -1162,6 +1346,8 @@ h2{font-size:1.25rem;font-weight:600}
     $("#nm-etiquetas").disabled = !etiquetas;
     $("#nm-etiquetas").textContent = "Imprimir etiquetas (" + plural(etiquetas, "etiqueta", "etiquetas") + ")";
     nmPaso("resultado");
+    $("#nm-catalogo").hidden = true;
+    const previa = $("#nm-cat-resultado"); if (previa) previa.remove();
     $("#nm-error").hidden = true;
   }
 
@@ -1178,6 +1364,24 @@ h2{font-size:1.25rem;font-weight:600}
     document.body.appendChild(enlace); enlace.click(); enlace.remove();
   });
   $("#nm-atras").addEventListener("click", () => nmPaso("cargar"));
+  $("#nm-al-catalogo").addEventListener("change", () => { pintarCatalogo(); cargarCatalogo(); });
+  $$("input[name=nm-cat]").forEach((r) => r.addEventListener("change", cargarCatalogo));
+  $("#nm-modelos").addEventListener("change", (e) => {
+    const s = e.target.closest("select[data-linea]");
+    if (!s) return;
+    const m = nmModelos[Number(s.dataset.linea)];
+    const f = nmCat.filtros.find(([k]) => k === s.value);
+    if (m) m.linea = f ? { filtro: f[0], linea: f[1] } : lineaPropuesta(m);
+  });
+  $("#nm-token").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("#nm-token-in").value.trim();
+    if (!v) return;
+    tokenGithub = v; $("#nm-token-in").value = "";
+    try { localStorage.setItem(CLAVE_GITHUB, v); } catch (_) { /* sin almacenamiento */ }
+    cargarCatalogo();
+  });
+  $("#nm-reintentar").addEventListener("click", enviarPendientes);
   $("#nm-otro").addEventListener("click", () => { nmModelos = []; nmPaso("cargar"); });
   $("#nm-crear").addEventListener("click", () => {
     const n = nmModelos.filter((m) => !m.errores.length).length;
