@@ -1,11 +1,17 @@
 """Crea plantilla-nuevos-modelos.xlsx (la que baja "Descargar plantilla" en Nuevos modelos).
 Arriba de cada columna: si es obligatoria u opcional y para qué sirve, como la plantilla de Bsale.
 Solo usa la biblioteca estándar de Python:  python3 plantillas/crear-plantilla-nuevos-modelos.py
+Con filas ya llenas (para preparar una carga):  python3 plantillas/crear-plantilla-nuevos-modelos.py filas.json salida.xlsx
+(filas.json = lista de filas [Tipo, Nombre, Marca, Color, Talla, Código, SKU, Stock, Costo, Precio]; van en negro, sin ejemplos)
 """
-import zipfile, os
+import zipfile, os, sys, json
 from xml.sax.saxutils import escape
 
 SALIDA = os.path.join(os.path.dirname(__file__), "..", "plantilla-nuevos-modelos.xlsx")
+FILAS = None
+if len(sys.argv) >= 3:
+    FILAS = json.load(open(sys.argv[1], encoding="utf-8"))
+    SALIDA = sys.argv[2]
 
 # (encabezado, ancho, obligatorio, descripción)
 COLUMNAS = [
@@ -95,13 +101,18 @@ def fila(n, celdas, alto=None):
 
 fila(1, [celda("A1", TITULO, 1)], 24)
 fila(2, [celda("A2", INSTRUCCIONES, 2)], 32)
-fila(3, [celda("A3", AVISO, 3)])
+fila(3, [celda("A3", AVISO if FILAS is None else "Completa Stock, Costo y Precio de cada fila. Deja vacíos el código de barras y el SKU para que se generen.", 3)])
 fila(4, [celda(f"{L[i]}4", c[2], 4 if c[2] == "Obligatorio" else 5) for i, c in enumerate(COLUMNAS)], 30)
 fila(5, [celda(f"{L[i]}5", c[3], 6) for i, c in enumerate(COLUMNAS)], 112)
 fila(6, [celda(f"{L[i]}6", c[0], 7) for i, c in enumerate(COLUMNAS)], 20)
-for j, e in enumerate(EJEMPLOS):
-    n = 7 + j
-    fila(n, [celda(f"{L[i]}{n}", v, 9 if i in (8, 9) and v != "" else 8) for i, v in enumerate(e)])
+if FILAS is None:
+    for j, e in enumerate(EJEMPLOS):
+        n = 7 + j
+        fila(n, [celda(f"{L[i]}{n}", v, 9 if i in (8, 9) and v != "" else 8) for i, v in enumerate(e)])
+else:
+    for j, e in enumerate(FILAS):
+        n = 7 + j
+        fila(n, [celda(f"{L[i]}{n}", v, 0) for i, v in enumerate(e)])
 
 hoja = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
