@@ -164,6 +164,9 @@ h2{font-size:1.25rem;font-weight:600}
 .nm-color b{font-weight:600}
 .nm-color .nm-tallas{font-variant-numeric:tabular-nums}
 .nm-color .nm-der{text-align:right;color:var(--gris);white-space:nowrap}
+.nm-color .ya{color:var(--gris);text-decoration:line-through}
+.nm-modelo.nada{background:var(--piedra);color:var(--gris)}
+.nm-modelo.nada .nm-est{color:var(--gris)}
 .nm-codigos{font:400 .8125rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gris);grid-column:1 / -1}
 #nuevos .imp-acciones{flex-wrap:wrap}
 .nm-catalogo{display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--piedra);border-radius:8px}
@@ -1008,7 +1011,7 @@ h2{font-size:1.25rem;font-weight:600}
     else if (activo) t = "Se agregarán a Pendientes de " + repo + " (" + plural(nmCat.productos.length, "producto publicado", "productos publicados") + ", " + plural(nmCat.pendientes.length, "pendiente", "pendientes") + "). Allí se les pone foto y color y se publican.";
     $("#nm-cat-estado").textContent = t;
     const listo = !activo || (nmCat && nmCat.repo === repo);
-    const buenos = nmModelos.filter((m) => !m.errores.length).length;
+    const buenos = nmModelos.filter(listo).length;
     $("#nm-crear").disabled = !buenos || !listo;
   }
   async function cargarCatalogo() {
@@ -1054,6 +1057,7 @@ h2{font-size:1.25rem;font-weight:600}
       const m = nmModelos.find((x) => norm(x.nombre) === norm(r.nombre));
       if (!m || !m.linea) return;
       porColor(r.articulos).forEach(([color, as]) => {
+        if (Array.isArray(r.coloresNuevos) && !r.coloresNuevos.some((c) => norm(c) === norm(color))) return;   // color que ya tenía
         const vs = m.variantes.filter((v) => norm(v.color) === norm(color));
         const precios = vs.map((v) => v.precio).filter((x) => x > 0);
         const tallas = as.map((a) => a.talla);
@@ -1202,15 +1206,51 @@ h2{font-size:1.25rem;font-weight:600}
   }
 
   // Misma revisión que hace el worker, para verla antes de crear
-  function revisarNuevos(modelos) {
-    const enShopify = new Set(ARTICULOS.map((a) => a.nNombre));
+  /* Lo que ya hay en Shopify de cada modelo: { combos: Set("color|talla"), colores: Set, precios: [] | null }
+     Sale de los artículos cargados y, en vivo, de la API pública de la tienda (también trae los precios). */
+  const TIENDA_SHOPIFY = "y0mdhy-r0.myshopify.com";
+  async function enShopifyVivo(nombre) {
+    const r = await fetch("https://" + TIENDA_SHOPIFY + "/api/2026-10/graphql.json", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: `query($q: String!) { products(first: 5, query: $q) { nodes { title variants(first: 100) { nodes { price { amount } selectedOptions { name value } } } } } }`,
+        variables: { q: "title:\"" + nombre.replace(/["\\]/g, "") + "\"" } }) });
+    const d = await r.json();
+    const p = ((d.data && d.data.products && d.data.products.nodes) || []).find((x) => norm(x.title) === norm(nombre));
+    if (!p) return null;
+    return p.variants.nodes.map((v) => {
+      const o = {}; v.selectedOptions.forEach((s) => { o[norm(s.name)] = s.value; });
+      return { color: o.color || "", talla: o.talla || "", precio: Number(v.price.amount) };
+    });
+  }
+  async function existentesDe(modelos) {
+    const info = new Map();
+    modelos.forEach((m) => {
+      const as = ARTICULOS.filter((a) => a.nNombre === norm(m.nombre));
+      if (as.length) info.set(norm(m.nombre), { combos: new Set(as.map((a) => norm(a.color) + "|" + norm(a.talla))), colores: new Set(as.map((a) => norm(a.color))), precios: null });
+    });
+    await Promise.all(modelos.map(async (m) => {
+      try {
+        const vs = await enShopifyVivo(m.nombre);
+        if (!vs) return;
+        const k = norm(m.nombre), x = info.get(k) || { combos: new Set(), colores: new Set(), precios: null };
+        vs.forEach((v) => { x.combos.add(norm(v.color) + "|" + norm(v.talla)); x.colores.add(norm(v.color)); });
+        x.precios = [...new Set(vs.map((v) => v.precio))];
+        info.set(k, x);
+      } catch (e) { /* sin conexión: queda lo de los artículos cargados; el worker revisa de nuevo al crear */ }
+    }));
+    return info;
+  }
+
+  // Misma revisión que hace el worker, para verla antes de crear.
+  // Modelo que ya existe: solo se agregan sus colores y tallas nuevos (los que existen no se tocan).
+  function revisarNuevos(modelos, existentes) {
     const codigosHoja = new Map();                 // código -> primer modelo que lo usa
     modelos.forEach((m) => {
       m.tipo = [...m.tipos][0] || ""; m.marca = [...m.marcas][0] || "";
       if (!m.tipo) m.errores.push("Falta el tipo (Zapatillas, Botines…).");
       if (m.tipos.size > 1) m.errores.push("Tiene tipos distintos en sus filas: " + [...m.tipos].join(", ") + ".");
       if (m.marcas.size > 1) m.errores.push("Tiene marcas distintas en sus filas: " + [...m.marcas].join(", ") + ".");
-      if (enShopify.has(norm(m.nombre))) m.errores.push("El modelo ya existe en Shopify. No se crea de nuevo: agrega el stock a mano o con su código de barras.");
+      const ya = existentes.get(norm(m.nombre));
+      m.existe = !!ya;
       const vistos = new Set();
       m.variantes.forEach((v) => {
         const f = "Fila " + v.filaExcel + ": ";
@@ -1218,7 +1258,11 @@ h2{font-size:1.25rem;font-weight:600}
         const k = norm(v.color) + "|" + norm(v.talla);
         if (v.color && v.talla && vistos.has(k)) m.errores.push(f + v.color + " talla " + v.talla + " está repetido.");
         vistos.add(k);
+        v.existe = !!(ya && ya.combos.has(k));
+        if (v.existe) return;                       // ya está en Shopify: no se toca, no se revisa más
         if (!(v.precio > 0)) m.errores.push(f + "falta el precio o no es válido.");
+        else if (ya && ya.precios && ya.precios.length && !ya.precios.some((x) => Math.abs(x - v.precio) < 0.005))
+          m.errores.push(f + v.color + " " + v.talla + " tiene precio " + solesTxt(v.precio) + ", pero el modelo en Shopify tiene " + ya.precios.map(solesTxt).join(", ") + ". Debe ser el mismo.");
         if (!(Number.isInteger(v.stock) && v.stock >= 0)) m.errores.push(f + "el stock no es válido.");
         if (v.costo !== null && !(v.costo >= 0)) m.errores.push(f + "el costo no es válido.");
         [["codigo", "el código de barras "], ["sku", "el SKU "]].forEach(([campo, texto]) => {
@@ -1230,9 +1274,12 @@ h2{font-size:1.25rem;font-weight:600}
         if (v.codigo) codigosHoja.set(norm(v.codigo), m.nombre);
         if (v.sku && norm(v.sku) !== norm(v.codigo)) codigosHoja.set(norm(v.sku), m.nombre);
       });
+      m.nuevas = m.variantes.filter((v) => !v.existe);
+      m.nada = m.existe && !m.nuevas.length && !m.errores.length;   // todo ya existe: no se manda
     });
     return modelos;
   }
+  const listo = (m) => !m.errores.length && !m.nada;
 
   const plural = (n, uno, varios) => n + " " + (n === 1 ? uno : varios);
   const pares = (vs) => vs.reduce((s, v) => s + (Number.isInteger(v.stock) && v.stock > 0 ? v.stock : 0), 0);
@@ -1250,25 +1297,33 @@ h2{font-size:1.25rem;font-weight:600}
   }
 
   function pintarVistaNuevos() {
-    const buenos = nmModelos.filter((m) => !m.errores.length), malos = nmModelos.filter((m) => m.errores.length);
-    const nPares = buenos.reduce((s, m) => s + pares(m.variantes), 0);
+    const buenos = nmModelos.filter(listo), malos = nmModelos.filter((m) => m.errores.length), nada = nmModelos.filter((m) => m.nada);
+    const nuevos = buenos.filter((m) => !m.existe), aExistentes = buenos.filter((m) => m.existe);
+    const nPares = buenos.reduce((s, m) => s + pares(m.nuevas), 0);
     $("#nm-resumen").innerHTML = buenos.length
-      ? `${plural(buenos.length, "modelo listo", "modelos listos")} para crear: ${plural(buenos.reduce((s, m) => s + m.variantes.length, 0), "artículo", "artículos")}, ${plural(nPares, "par", "pares")} en stock.`
+      ? [nuevos.length ? plural(nuevos.length, "modelo nuevo", "modelos nuevos") : "", aExistentes.length ? plural(aExistentes.length, "modelo existente recibe", "modelos existentes reciben") + " colores o tallas nuevos" : ""].filter(Boolean).join(" y ")
+        + `: ${plural(buenos.reduce((s, m) => s + m.nuevas.length, 0), "artículo", "artículos")} por crear, ${plural(nPares, "par", "pares")} en stock.`
         + (malos.length ? ` <span class="falta">${plural(malos.length, "modelo tiene errores y no se creará", "modelos tienen errores y no se crearán")}.</span>` : "")
-      : `<span class="falta">Ningún modelo se puede crear. Corrige el Excel y vuelve a cargarlo.</span>`;
+        + (nada.length ? ` ${plural(nada.length, "modelo ya está completo en Shopify", "modelos ya están completos en Shopify")}.` : "")
+      : `<span class="falta">No hay nada que crear.${malos.length ? " Corrige el Excel y vuelve a cargarlo." : ""}</span>`;
     if (nmEjemplos) $("#nm-resumen").innerHTML += ` Se saltaron ${plural(nmEjemplos, "fila de ejemplo", "filas de ejemplo")}.`;
     $("#nm-modelos").innerHTML = nmModelos.map((m) => {
       const colores = porColor(m.variantes);
       const propios = m.variantes.filter((v) => v.codigo || v.sku).length;
-      return `<div class="nm-modelo${m.errores.length ? " malo" : ""}">
-        <div class="nm-cab"><b>${esc(m.nombre)}</b><span>${esc([m.tipo, m.marca].filter(Boolean).join(" · "))}${m.tipo || m.marca ? " · " : ""}${plural(colores.length, "color", "colores")} · ${plural(pares(m.variantes), "par", "pares")}</span>
-          <span class="nm-est">${m.errores.length ? "✕ No se creará" : "Listo para crear"}</span></div>
+      const estado = m.errores.length ? (m.existe ? "✕ No se agregará nada" : "✕ No se creará")
+        : m.nada ? "Ya existe todo en Shopify: nada que agregar"
+        : m.existe ? "Ya existe: se agregan " + plural(m.nuevas.length, "color/talla nuevo", "colores/tallas nuevos")
+        : "Modelo nuevo: listo para crear";
+      return `<div class="nm-modelo${m.errores.length ? " malo" : m.nada ? " nada" : ""}">
+        <div class="nm-cab"><b>${esc(m.nombre)}</b><span>${esc([m.tipo, m.marca].filter(Boolean).join(" · "))}${m.tipo || m.marca ? " · " : ""}${plural(colores.length, "color", "colores")} · ${plural(pares(m.nuevas || m.variantes), "par", "pares")}</span>
+          <span class="nm-est">${estado}</span></div>
         ${m.errores.length ? `<ul class="nm-errores">${m.errores.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
         <div class="nm-colores">${colores.map(([c, vs]) => `<div class="nm-color"><b>${esc(c)}</b>
-          <span class="nm-tallas">${vs.map((v) => esc(v.talla || "?") + " (" + (Number.isInteger(v.stock) ? v.stock : "?") + ")").join(" · ")}</span>
+          <span class="nm-tallas">${vs.map((v) => v.existe ? `<span class="ya" title="Ya existe en Shopify: no se toca">${esc(v.talla)}</span>` : esc(v.talla || "?") + " (" + (Number.isInteger(v.stock) ? v.stock : "?") + ")").join(" · ")}</span>
           <span class="nm-der">${precioTxt(vs)}</span></div>`).join("")}</div>
-        <span class="nota">${!propios ? "Los códigos de barras y SKU se generan al crear." : plural(propios, "fila trae", "filas traen") + " sus propios códigos" + (propios === m.variantes.length ? "." : "; los demás se generan al crear.")}</span>
-        ${!m.errores.length && $("#nm-al-catalogo").checked && nmCat && nmCat.repo === catElegido() ? selectorLinea(m, nmModelos.indexOf(m)) : ""}
+        ${m.existe && m.variantes.some((v) => v.existe) ? `<span class="nota">Tachadas: ya existen en Shopify y no se tocan (su stock no cambia).</span>` : ""}
+        ${m.nada ? "" : `<span class="nota">${!propios ? "Los códigos de barras y SKU se generan al crear." : plural(propios, "fila trae", "filas traen") + " sus propios códigos" + (propios === m.variantes.length ? "." : "; los demás se generan al crear.")}</span>`}
+        ${listo(m) && $("#nm-al-catalogo").checked && nmCat && nmCat.repo === catElegido() ? selectorLinea(m, nmModelos.indexOf(m)) : ""}
       </div>`;
     }).join("");
     $("#nm-catalogo").hidden = !buenos.length;
@@ -1289,7 +1344,7 @@ h2{font-size:1.25rem;font-weight:600}
         if (modelos) break;
       }
       if (!modelos) throw new Error("No se encontraron las columnas Nombre y Talla. Usa la plantilla.");
-      nmModelos = revisarNuevos(modelos);
+      nmModelos = revisarNuevos(modelos, await existentesDe(modelos));
       nmEjemplos = modelos.ejemplos || 0;
       pintarVistaNuevos();
     } catch (err) {
@@ -1298,7 +1353,7 @@ h2{font-size:1.25rem;font-weight:600}
   }
 
   async function crearNuevos() {
-    const buenos = nmModelos.filter((m) => !m.errores.length);
+    const buenos = nmModelos.filter(listo);
     if (!buenos.length || !clave) return;
     const boton = $("#nm-crear");
     boton.disabled = true; $("#nm-atras").disabled = true;
@@ -1343,11 +1398,11 @@ h2{font-size:1.25rem;font-weight:600}
       usarArticulos(ARTICULOS.filter((a) => !nuevos.some((n) => n.codigo === a.codigo)).concat(nuevos),
         `${(ARTICULOS.length + nuevos.length).toLocaleString("es-PE")} artículos de Shopify (incluye ${plural(nuevos.length, "artículo nuevo", "artículos nuevos")}).`);
     }
-    $("#nm-resumen").innerHTML = (ok.length ? `${plural(ok.length, "modelo creado", "modelos creados")} en Shopify: ${plural(nmCreados.length, "artículo", "artículos")}, ${plural(etiquetas, "par", "pares")} en stock.` : "No se creó ningún modelo.")
+    $("#nm-resumen").innerHTML = (ok.length ? `${plural(ok.length, "modelo creado o completado", "modelos creados o completados")} en Shopify: ${plural(nmCreados.length, "artículo nuevo", "artículos nuevos")}, ${plural(etiquetas, "par", "pares")} en stock.` : "No se creó nada.")
       + (mal.length ? ` <span class="falta">${plural(mal.length, "modelo no se creó", "modelos no se crearon")}.</span>` : "")
       + (fallo ? ` <span class="falta">${esc(fallo)}</span>` : "");
     $("#nm-modelos").innerHTML = resultados.map((r) => `<div class="nm-modelo${r.ok ? "" : " malo"}">
-      <div class="nm-cab"><b>${esc(r.nombre)}</b><span class="nm-est">${r.ok ? "✓ Creado" : "✕ No se creó"}</span></div>
+      <div class="nm-cab"><b>${esc(r.nombre)}</b><span class="nm-est">${r.ok ? (r.agregado ? (r.articulos.length === 1 ? "✓ Se agregó 1 color/talla" : "✓ Se agregaron " + r.articulos.length + " colores/tallas") : "✓ Creado") : "✕ No se creó nada"}</span></div>
       ${r.errores.length ? `<ul class="nm-errores">${r.errores.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
       ${r.avisos.length ? `<ul class="nm-avisos">${r.avisos.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
       ${r.ok ? `<div class="nm-colores">${porColor(r.articulos).map(([c, as]) => `<div class="nm-color"><b>${esc(c)}</b>
@@ -1395,8 +1450,8 @@ h2{font-size:1.25rem;font-weight:600}
   $("#nm-reintentar").addEventListener("click", enviarPendientes);
   $("#nm-otro").addEventListener("click", () => { nmModelos = []; nmPaso("cargar"); });
   $("#nm-crear").addEventListener("click", () => {
-    const n = nmModelos.filter((m) => !m.errores.length).length;
-    if (confirm("¿Crear " + plural(n, "modelo", "modelos") + " en Shopify con su stock?")) crearNuevos();
+    const n = nmModelos.filter(listo).length;
+    if (confirm("¿Crear o completar " + plural(n, "modelo", "modelos") + " en Shopify con su stock?")) crearNuevos();
   });
   $("#nm-etiquetas").addEventListener("click", () => {
     const quitados = nuevoLote();

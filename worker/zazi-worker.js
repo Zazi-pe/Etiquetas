@@ -3,7 +3,7 @@
    Versión 6: guarda una copia de los artículos activos de Shopify y se la da
    a la página de etiquetas (zazi-pe.github.io/Etiquetas), y crea modelos nuevos
    desde la herramienta "Nuevos modelos" de esa página.
-   Nunca cambia ni borra productos que ya existen en Shopify.
+   Nunca cambia ni borra lo que ya existe en Shopify: a un modelo existente solo le agrega colores y tallas nuevos.
 
    Configuración en Cloudflare:
      Variables  SHOPIFY_TIENDA          dirección .myshopify.com de la tienda (sin https://)
@@ -299,10 +299,14 @@ function variantesDe(c, pid) {
 
 /* ---------- /crear: modelos nuevos desde la herramienta "Nuevos modelos" ----------
    Recibe { modelos: [{ nombre, tipo, marca, variantes: [{ color, talla, codigo, sku, stock, costo, precio }] }] }
-   (una variante por color y talla). Un modelo que ya existe en Shopify NO se toca: se devuelve como error.
+   (una variante por color y talla). Modelo nuevo: se crea. Modelo que ya existe: solo se le AGREGAN los colores y
+   tallas que no tiene (las filas que ya existen no se tocan: su stock no cambia); si el precio de una fila nueva no es
+   uno de los precios que el modelo ya tiene en Shopify, no se agrega nada a ese modelo.
    Código de barras vacío: se genera un EAN-13 que empieza con 20. SKU vacío: igual al código de barras.
-   Devuelve { resultados: [{ nombre, ok, producto, errores, avisos, articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] }
-   (producto = id numérico del producto creado en Shopify) */
+   Devuelve { resultados: [{ nombre, ok, agregado, producto, coloresNuevos, errores, avisos,
+                             articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] }
+   (producto = id numérico en Shopify; agregado = true si se agregaron filas a un modelo existente;
+    coloresNuevos = colores que el modelo no tenía) */
 const MAX_MODELOS = 10;                              // por pedido (límite de consultas del plan gratis de Cloudflare)
 const nrm = (t) => String(t == null ? "" : t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 const textoDe = (t) => String(t == null ? "" : t).trim();
@@ -317,6 +321,88 @@ function ean13() {
   return d.join("");
 }
 
+// Los códigos que vienen en las filas que se van a crear no pueden existir ni repetirse
+function revisarCodigos(variantes, usados) {
+  const errores = [], propios = new Set();
+  variantes.forEach((v) => {
+    [v.codigo, v.sku].forEach((x, j) => {
+      if (!x) return;
+      if (usados.has(nrm(x)) || (j === 0 ? propios.has(nrm(x)) : propios.has(nrm(x)) && nrm(x) !== nrm(v.codigo)))
+        errores.push("Fila " + v.fila + ": " + (j ? "el SKU " : "el código de barras ") + x + " ya existe o está repetido.");
+    });
+    if (v.codigo) propios.add(nrm(v.codigo));
+    if (v.sku && nrm(v.sku) !== nrm(v.codigo)) propios.add(nrm(v.sku));
+  });
+  return errores;
+}
+// Códigos vacíos: se generan (y se reservan para no repetirlos en el mismo pedido)
+function completarCodigos(variantes, usados) {
+  variantes.forEach((v) => {
+    if (!v.codigo) { do { v.codigo = ean13(); } while (usados.has(nrm(v.codigo))); }
+    usados.add(nrm(v.codigo));
+    if (!v.sku) v.sku = v.codigo;
+    usados.add(nrm(v.sku));
+  });
+}
+const solesW = (n) => "S/ " + Number(n).toFixed(2);
+
+/* Modelo que ya existe: se le agregan solo los colores y tallas que no tiene */
+async function agregarAExistente(env, c, pid, r, res, ubicacion, usados) {
+  const p = (await shopify(env, `query($id: ID!) { product(id: $id) {
+    id title productType status options { name }
+    variants(first: 250) { nodes { price selectedOptions { name value } } } } }`, { id: "gid://shopify/Product/" + pid })).product;
+  res.producto = pid;
+  if (!p) { res.errores.push("No se pudo leer el modelo en Shopify."); return false; }
+  const opciones = p.options.map((o) => nrm(o.name)).sort().join(",");
+  if (opciones !== "color,talla") { res.errores.push("El modelo en Shopify no tiene solo las opciones Color y Talla; no se le pueden agregar filas desde aquí."); return false; }
+  const llave = (co, ta) => nrm(co) + "|" + nrm(ta);
+  const existentes = new Set(), coloresAntes = new Set();
+  p.variants.nodes.forEach((v) => { const o = colorYTalla(v.selectedOptions); existentes.add(llave(o.co, o.ta)); coloresAntes.add(nrm(o.co)); });
+  const nuevas = r.variantes.filter((v) => !existentes.has(llave(v.color, v.talla)));
+  const yaEstan = r.variantes.length - nuevas.length;
+  if (!nuevas.length) { res.errores.push("Todos sus colores y tallas ya existen en Shopify: no hay nada que agregar."); return false; }
+  const precios = [...new Set(p.variants.nodes.map((v) => Number(v.price)))];
+  const malos = nuevas.filter((v) => !precios.some((x) => Math.abs(x - v.precio) < 0.005));
+  if (malos.length) {
+    res.errores.push("El precio no coincide con el del modelo en Shopify (" + precios.map(solesW).join(", ") + "): " +
+      malos.map((v) => v.color + " " + v.talla + " a " + solesW(v.precio)).join("; ") + ". No se agregó nada a este modelo.");
+    return false;
+  }
+  const errCodigos = revisarCodigos(nuevas, usados);
+  if (errCodigos.length) { res.errores.push(...errCodigos); return false; }
+  completarCodigos(nuevas, usados);
+  let creado;
+  try {
+    creado = (await shopify(env, `mutation($id: ID!, $v: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkCreate(productId: $id, variants: $v) {
+        productVariants { id sku selectedOptions { name value } barcodes(first: 1) { nodes { value } } }
+        userErrors { field message }
+      }
+    }`, { id: p.id, v: nuevas.map((v) => ({
+      optionValues: [{ optionName: "Color", name: v.color }, { optionName: "Talla", name: v.talla }],
+      price: v.precio.toFixed(2),
+      barcodes: [{ value: v.codigo }],
+      inventoryPolicy: "DENY",
+      taxable: true,
+      inventoryItem: { sku: v.sku, tracked: true, ...(v.costo !== null ? { cost: v.costo.toFixed(2) } : {}) },
+      inventoryQuantities: [{ locationId: ubicacion, availableQuantity: v.stock }]
+    })) })).productVariantsBulkCreate;
+  } catch (e) { res.errores.push("Shopify no agregó las filas: " + String(e.message || e)); return false; }
+  if (creado.userErrors && creado.userErrors.length) { res.errores.push(...creado.userErrors.map((e) => "Shopify: " + e.message)); return false; }
+  res.ok = true; res.agregado = true;
+  res.coloresNuevos = [...new Set(nuevas.filter((v) => !coloresAntes.has(nrm(v.color))).map((v) => v.color))];
+  if (yaEstan) res.avisos.push((yaEstan === 1 ? "1 fila ya existía" : yaEstan + " filas ya existían") + " en Shopify y no se tocó (su stock no cambia).");
+  if (!c.productos[pid]) c.productos[pid] = aProducto(p);
+  const stockDe = new Map(nuevas.map((v) => [llave(v.color, v.talla), v.stock]));
+  creado.productVariants.forEach((v) => {
+    const codigo = v.barcodes && v.barcodes.nodes[0] ? v.barcodes.nodes[0].value : "";
+    const a = aArticulo(v, pid, codigo);
+    c.articulos[numero(v.id)] = a;
+    res.articulos.push({ codigo: a.c, sku: a.s, nombre: c.productos[pid].n, tipo: c.productos[pid].t, color: a.co, talla: a.ta, stock: stockDe.get(llave(a.co, a.ta)) || 0 });
+  });
+  return true;
+}
+
 function revisarModelo(m, c, usados) {
   const errores = [];
   const nombre = textoDe(m && m.nombre), tipo = textoDe(m && m.tipo);
@@ -325,9 +411,7 @@ function revisarModelo(m, c, usados) {
   const variantes = Array.isArray(m && m.variantes) ? m.variantes : [];
   if (!variantes.length) errores.push("No tiene filas de color y talla.");
   if (variantes.length > 250) errores.push("Tiene más de 250 combinaciones de color y talla.");
-  if (nombre && Object.values(c.productos).some((p) => nrm(p.n) === nrm(nombre)))
-    errores.push("El modelo ya existe en Shopify. No se crea de nuevo: agrega el stock a mano o con su código de barras.");
-  const vistos = new Set(), codigosModelo = new Set();
+  const vistos = new Set();
   const limpias = variantes.map((v, i) => {
     const f = "Fila " + (i + 1) + ": ";
     const color = textoDe(v.color), talla = textoDe(v.talla);
@@ -341,13 +425,7 @@ function revisarModelo(m, c, usados) {
     if (!(precio > 0)) errores.push(f + "el precio no es válido.");
     if (!(Number.isInteger(stock) && stock >= 0 && stock <= 9999)) errores.push(f + "el stock no es válido.");
     if (costo !== null && !(costo >= 0)) errores.push(f + "el costo no es válido.");
-    [codigo, sku].forEach((x, j) => {
-      if (!x) return;
-      if (usados.has(nrm(x)) || codigosModelo.has(nrm(x))) errores.push(f + (j ? "el SKU " : "el código de barras ") + x + " ya existe o está repetido.");
-    });
-    if (codigo) codigosModelo.add(nrm(codigo));
-    if (sku && nrm(sku) !== nrm(codigo)) codigosModelo.add(nrm(sku));
-    return { color, talla, precio, stock, costo, codigo, sku };
+    return { fila: i + 1, color, talla, precio, stock, costo, codigo, sku };
   });
   return { nombre, tipo, marca: textoDe(m && m.marca), variantes: limpias, errores };
 }
@@ -380,21 +458,20 @@ async function crear(env, cuerpo) {
     resultados.push(res);
     if (r.errores.length) continue;
 
-    // Revisión en vivo: si el modelo ya está en Shopify (aunque la copia no lo tenga), no se crea
-    const busca = (await shopify(env, `query($q: String!) { products(first: 10, query: $q) { nodes { title } } }`,
-      { q: "title:\"" + r.nombre.replace(/["\\]/g, "") + "\"" })).products.nodes;
-    if (busca.some((p) => nrm(p.title) === nrm(r.nombre))) {
-      res.errores.push("El modelo ya existe en Shopify. No se crea de nuevo: agrega el stock a mano o con su código de barras.");
-      continue;
+    // ¿Ya existe? Primero en la copia guardada; si no, búsqueda en vivo por título
+    let pid = Object.keys(c.productos).find((k) => nrm(c.productos[k].n) === nrm(r.nombre));
+    if (!pid) {
+      const busca = (await shopify(env, `query($q: String!) { products(first: 10, query: $q) { nodes { id title } } }`,
+        { q: "title:\"" + r.nombre.replace(/["\\]/g, "") + "\"" })).products.nodes;
+      const igual = busca.find((p) => nrm(p.title) === nrm(r.nombre));
+      if (igual) pid = numero(igual.id);
     }
+    if (pid) { if (await agregarAExistente(env, c, pid, r, res, ubicacion, usados)) cambio = true; continue; }
 
-    // Códigos: los que vienen se usan; los vacíos se generan
-    r.variantes.forEach((v) => {
-      if (!v.codigo) { do { v.codigo = ean13(); } while (usados.has(nrm(v.codigo))); }
-      usados.add(nrm(v.codigo));
-      if (!v.sku) v.sku = v.codigo;
-      usados.add(nrm(v.sku));
-    });
+    // Modelo nuevo. Códigos: los que vienen se usan (sin repetir); los vacíos se generan
+    const errCodigos = revisarCodigos(r.variantes, usados);
+    if (errCodigos.length) { res.errores.push(...errCodigos); continue; }
+    completarCodigos(r.variantes, usados);
     const num = (t) => (isNaN(parseFloat(t)) ? Infinity : parseFloat(t));
     const colores = [...new Set(r.variantes.map((v) => v.color))];
     const tallas = [...new Set(r.variantes.map((v) => v.talla))].sort((a, b) => num(a) - num(b) || a.localeCompare(b));
@@ -444,15 +521,16 @@ async function crear(env, cuerpo) {
     } else res.avisos.push("Creado, pero no se encontraron los canales Tienda online y Punto de venta para publicarlo.");
 
     // Se agrega a la copia (así las etiquetas lo ven enseguida y no se puede crear dos veces)
-    const pid = numero(p.id);
-    res.producto = pid;                              // id del producto en Shopify (para conectarlo al catálogo)
-    c.productos[pid] = aProducto(p);
+    const pidNuevo = numero(p.id);
+    res.producto = pidNuevo;
+    res.coloresNuevos = colores.slice();                              // id del producto en Shopify (para conectarlo al catálogo)
+    c.productos[pidNuevo] = aProducto(p);
     const stockDe = new Map(variantes.map((v) => [nrm(v.color) + "|" + nrm(v.talla), v.stock]));
     p.variants.nodes.forEach((v) => {
       const codigo = v.barcodes && v.barcodes.nodes[0] ? v.barcodes.nodes[0].value : "";
-      const a = aArticulo(v, pid, codigo);
+      const a = aArticulo(v, pidNuevo, codigo);
       c.articulos[numero(v.id)] = a;
-      res.articulos.push({ codigo: a.c, sku: a.s, nombre: c.productos[pid].n, tipo: c.productos[pid].t, color: a.co, talla: a.ta, stock: stockDe.get(nrm(a.co) + "|" + nrm(a.ta)) || 0 });
+      res.articulos.push({ codigo: a.c, sku: a.s, nombre: c.productos[pidNuevo].n, tipo: c.productos[pidNuevo].t, color: a.co, talla: a.ta, stock: stockDe.get(nrm(a.co) + "|" + nrm(a.ta)) || 0 });
     });
     cambio = true;
   }

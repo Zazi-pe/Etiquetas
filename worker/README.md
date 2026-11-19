@@ -68,7 +68,7 @@ Body: `{ modelos: [{ nombre, tipo, marca, variantes: [{ color, talla, codigo, sk
 - **Checks (errors skip that model, the rest go on):** name and type required; color, size and price > 0 per row;
   stock a whole number ≥ 0 (empty = 0); no repeated color + size; a given barcode or SKU must not exist in the
   saved copy, earlier in the same call, or in another row of the model; **a model that already exists is never
-  touched** (checked against the saved copy and live with a title search): "El modelo ya existe en Shopify…".
+  touched as a whole**: if the model exists (saved copy first, then a live title search), only its missing color + size rows are added with `productVariantsBulkCreate` (stock via `inventoryQuantities { locationId, availableQuantity }`, SKU via `inventoryItem.sku`); existing rows are skipped (an `aviso` says how many); a new row whose price isn't one of the model's current prices blocks that model; a model with options other than exactly Color + Talla is refused. The result says `agregado: true` and `coloresNuevos` (colors the model didn't have).
 - **Codes:** empty barcode → a new **EAN-13 starting with `20`** (valid check digit, unique); empty SKU → same as
   the barcode. Codes given in the sheet are used as they are.
 - **Creation:** `productSet` (synchronous) with options Color and Talla, `productType`, `vendor` (Marca), status
