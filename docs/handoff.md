@@ -202,7 +202,7 @@ As far as known: about 100k worker requests a day, about 50 outgoing requests pe
 
 ## 7. Next steps (in Stefano's priority order)
 
-0. **Redeploy the worker** (Nov 19 version: `/crear` returns `producto`, and CORS allows `Content-Type`). Without it, pending products are saved without the Shopify id and the admin finds it by SKU when opened (works once Shopify's search has indexed the product).
+0. Worker with `producto` and the CORS fix is deployed (checked Nov 19 with the Cloudflare connector). Next: a real test of "Agregar también al catálogo" → publish from the catalog admin.
 1. **Nuevos modelos is live and tested (Nov 19).** Worker version 6 (with the access-denied retry) is deployed; `/diagnostico` shows all 7 permissions. A live test created "PRUEBA Nuevos Modelos – borrar" (Zapatillas, PRUEBA, Negro 35/36 + Blanco 35, stock 1/0/2, cost 10, price 99.90, `gid://shopify/Product/15520067780829`). Checked in Shopify: ACTIVE, published on Online Store and Point of Sale, options Color/Talla, generated EAN-13 `20…` as barcode and SKU, tracked, DENY, taxable, cost 10.00, stock at the Aljovín location; it appeared in `/articulos` at once and a second create was refused ("ya existe"). **Delete that test product in Shopify** if it's still there. Note: Shopify's public search (used by the catalog admin's "connect by SKU") takes a few minutes to index a brand-new product.
 2. **Stock upload tool (next, separate from Nuevos modelos):** add stock to existing models (e.g. by barcode/SKU and quantity). Not designed yet.
 3. **Load new shipments** (New Athletic, I-RUN) with Nuevos modelos. Stefano fills the sheet from the documents (factura, guía, NA Excel, box photos); Claude can help prepare it and cross-check totals.
