@@ -97,7 +97,7 @@ function cabecerasCors(request) {
   return {
     "Access-Control-Allow-Origin": origen,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "X-Clave",
+    "Access-Control-Allow-Headers": "X-Clave, Content-Type",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin"
   };

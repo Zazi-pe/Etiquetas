@@ -1122,7 +1122,7 @@ h2{font-size:1.25rem;font-weight:600}
       boton.textContent = "Creando " + Math.min(i + grupo.length, buenos.length) + " de " + buenos.length + "…";
       try {
         const r = await fetch(WORKER + "/crear", {
-          method: "POST", headers: { "X-Clave": clave, "Content-Type": "application/json" }, cache: "no-store",
+          method: "POST", headers: { "X-Clave": clave }, cache: "no-store",           // sin Content-Type: así el navegador no pide permiso extra (CORS)
           body: JSON.stringify({ modelos: grupo.map((m) => ({ nombre: m.nombre, tipo: m.tipo, marca: m.marca,
             variantes: m.variantes.map((v) => ({ color: v.color, talla: v.talla, codigo: v.codigo, sku: v.sku, stock: v.stock, costo: v.costo, precio: v.precio })) })) })
         });
