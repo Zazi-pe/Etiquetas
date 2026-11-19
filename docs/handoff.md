@@ -1,4 +1,4 @@
-# ZAZI — Shopify, labels and worker: handoff (living document, last updated November 18, 2026)
+# ZAZI — Shopify, labels, new models and worker: handoff (living document, last updated November 18, 2026)
 
 Living handoff for the **Etiquetas** repo and everything around ZAZI's inventory system: the label printer page, the Cloudflare worker that bridges the inventory system, webhooks, and loading supplier shipments. It lives at `docs/handoff.md` in the Etiquetas repo and is updated at the end of every Claude Code session (see `CLAUDE.md`).
 
@@ -33,15 +33,15 @@ It replaces the Nov 6 chat handoff. The catalog repos (Zazi, Zazi-Modelos) have 
 
 | Piece | Where | Status |
 |---|---|---|
-| Label page | https://zazi-pe.github.io/Etiquetas/ (repo `Zazi-pe/Etiquetas`, file `index.html`). The repo also has `README.md`, `CLAUDE.md`, `docs/handoff.md` and `worker/` | Live. Since Nov 18 it reads Shopify through the new worker; Stefano ran the test checklist and confirmed it works |
-| Worker (Shopify bridge) | https://zazi-shopify.stefanoportalatinotapia.workers.dev (Cloudflare, free plan; the old `zazi-bsale` worker renamed). Code: `worker/zazi-worker.js` | **Version 5** deployed Nov 18. Saved copy verified: 268 products, 1,411 variants, matching Shopify |
-| KV storage | namespace `zazi-catalogo`, bound as `CATALOGO` | Working (keys `catalogo` and `token-shopify`) |
+| Label page | https://zazi-pe.github.io/Etiquetas/ (repo `Zazi-pe/Etiquetas`, file `index.html`). The repo also has `README.md`, `CLAUDE.md`, `docs/handoff.md` and `worker/` | Live. Two sections at the top: **Imprimir etiquetas** (reads Shopify through the worker; Stefano confirmed it works) and **Nuevos modelos** (built Nov 18, section 4) |
+| Worker (Shopify bridge) | https://zazi-shopify.stefanoportalatinotapia.workers.dev (Cloudflare, free plan; the old `zazi-bsale` worker renamed). Code: `worker/zazi-worker.js` | Version 5 deployed Nov 18 (268 products, 1,411 variants verified). **Version 6** (adds `POST /crear`) is in the repo; check with the Cloudflare connector whether Stefano deployed it |
+| KV storage | namespace `zazi-catalogo`, bound as `CATALOGO` | Working (keys `catalogo` and the cached token, `token-shopify-v6` since version 6) |
 | Nightly refresh | Cron `0 8 * * *` (3 a.m. Lima) | Kept from the Bsale worker; check Settings → Triggers if refreshes look stale |
 | Webhooks | Shopify `PRODUCTS_CREATE`, `PRODUCTS_UPDATE`, `PRODUCTS_DELETE` → `…/shopify/webhook` | **Registered Nov 18** (confirmed via `GET /webhooks`). A live test (rename a product, reload without Actualizar) is still to do |
-| Shopify app | "ZAZI Connector", created in the Shopify Dev Dashboard, installed on the ZAZI store | Gives the worker its access token (client credentials). Scope `read_products` (Stefano may also have kept `write_products`) |
+| Shopify app | "ZAZI Connector", created in the Shopify Dev Dashboard, installed on the ZAZI store | Gives the worker its access token (client credentials). **Version 3** (Nov 18) scopes: `read_products, write_products, read_inventory, write_inventory, read_locations, write_publications` |
 | Real printing | Windows PC with **Xprinter XP-365B** (also has an XP-318B) | Working. Requires a **75 × 50 mm custom paper size in the printer driver** (see section 4) |
 | Products in Shopify | | All Bsale models migrated. **New Athletic and I-RUN models are not loaded yet** (see section 7) |
-| Catalogs connected to Shopify | | Not started (next big task, section 7) |
+| Catalogs connected to Shopify | | Done Nov 18 (catalog repos' handoff): You and Pasador connected by SKU; Anda and I-RUN not in Shopify yet |
 | Bsale | | Being shut off. The old worker (version 4) is in this repo's git history |
 
 ---
@@ -62,7 +62,10 @@ It replaces the Nov 6 chat handoff. The catalog repos (Zazi, Zazi-Modelos) have 
 - `ProductVariant.barcode` is **deprecated** in 2026-10: use the `barcodes` connection (`barcodes(first: 1) { nodes { value } }`). A variant can hold up to 20 barcodes; the worker takes the first.
 - Search filters: `productVariants(query: "product_status:active")` (lowercase value works), `productsCount(query: "status:active")`.
 - **Rate limit:** cost-based, Standard plan 100 points/second. Paging 1,400 variants (~500 points per 100) would take about a minute, so the full download uses a **bulk operation** (`bulkOperationRunQuery`, poll `bulkOperation(id)`, download the JSONL from `url`). Nested connections come as separate JSONL lines with `__parentId`.
-- `locations` needs the `read_locations` scope (the app doesn't have it; `/diagnostico` dropped it). Stock per location will need `read_inventory` (and probably `read_locations`) for the catalog work.
+- `locations` needs `read_locations`; publishing needs `write_publications` (API-created products start unpublished). Publications' names come from `publication.catalog.title` (`Publication.name` is deprecated): "Channel Catalog … for Online Store" / "… for Point of Sale".
+- **Creating products:** `productSet(input, synchronous: true)` with `productOptions` and `variants` (`optionValues`, `price`, `sku`, `barcodes: [{ value }]`, `inventoryItem { tracked, cost }`, `inventoryQuantities [{ locationId, name: "available", quantity }]`). `productSet` replaces list fields it's given, so **never use it to add variants to an existing product** (use `productVariantsBulkCreate`); the tool doesn't touch existing products anyway.
+- Existing variants: tracked, `inventoryPolicy` DENY, taxable, cost ("costo por artículo") stored without IGV (e.g. 42.37), barcode type empty.
+- **Codes in the store:** BoxHero-era products have `SKU-XXXXXXXX` plus a different EAN-13 starting with `20`; Bsale-era products have the same number as SKU and barcode (e.g. You: 14 digits). New products from the tool: EAN-13 `20…` used for both.
 - **Webhooks:** registered through the API (`webhookSubscriptionCreate`, input `{ uri, format: JSON }`); signed with the app's **client secret** in `X-Shopify-Hmac-Sha256` (base64 HMAC-SHA256 of the raw body). The webhook API version is set in the app version (2026-10).
 - Claude has a Shopify connector in Claude Code that can run read-only Admin GraphQL queries against the store, useful for checks.
 
@@ -95,6 +98,16 @@ Single HTML file (about 47 KB), all Spanish, BoxHero-like layout. Built and test
 - **Preview step:** summary ("8 artículos, 11 etiquetas listas para agregar. 1 SKU no está en Shopify y no se imprimirá."), a table (Artículo, SKU, Copias), **Atrás** (back one step) and **Siguiente**.
 - **Siguiente** adds the matched items to the main list (**copies add to items already selected**), returns to the main screen with previews, and shows a toast ("Se agregaron N artículos (M etiquetas)").
 - Tested with `Stock-actual_ALJOVIN_06-11-2026.xlsx` (8 Acrilico SKUs, 9 labels) plus an unknown SKU and a repeated row: all behaved as above.
+
+### Nuevos modelos (second section of the page, built Nov 18)
+A menu at the top of the page switches between **Imprimir etiquetas** (everything above) and **Nuevos modelos**. The new section creates models in Shopify from an Excel, like Bsale's bulk load; it needs the Shopify articles loaded in the label section (with the clave) to check for repeats.
+- **Template** ("Descargar plantilla" → `plantilla-nuevos-modelos.xlsx`): sheet "Modelos" with `Tipo | Nombre | Marca | Color | Talla | Código de barras | SKU | Stock | Costo (sin IGV) | Precio`, and a sheet "Ejemplo" that is never read. **One row per color and size.** Bsale's own template also works: headers are found in the first 30 rows by name (`Tipo de producto o servicio`, `Nombre Producto/Servicio`, `Código Barras`, `Costo Neto`, `Precio Unitario`, `Variante` "Negro / 35" when Color/Talla are empty…). Only the first sheet with the header is read.
+- Cells are read **raw** (`sheet_to_json(..., { raw: true })`) so long numeric barcodes don't turn into "2.06E+12".
+- **Rules agreed with Stefano:** empty barcode/SKU → generated by the worker (EAN-13 `20…`, SKU = barcode); filled → used as given (some suppliers bring their own barcodes). Empty stock → 0. Costo is without IGV. The name becomes the Shopify title exactly as typed. **A model that already exists in Shopify is an error** ("ya existe… agrega el stock a mano o con su código de barras"): the tool never adds colors to existing models or touches existing products. Updating stock is a separate tool, planned later.
+- **Review step:** one card per model (type · brand · colors · pairs; per color the sizes with stock "35 (2) · 36 (0)" and price; how many codes are given vs generated) with its errors in red (Excel row numbers). Models with errors aren't sent; the others are. Checks: missing type/color/size/price, mixed types or brands in one model, repeated color+size, invalid stock or cost, a given code that already exists in Shopify or is repeated in the sheet, model already in Shopify.
+- **"Crear en Shopify (N modelos)"** (with a confirm) sends batches of 10 to `POST /crear`; the worker checks everything again (including a live title search) before creating. If a batch fails (connection), it stops and says which weren't created; reloading the Excel is safe because created models now show as existing.
+- **Result:** ✓ created / ✕ not created per model, with each size's barcode (and SKU when different) and any notice (e.g. not published). The new articles are added to the label list at once, and **"Imprimir etiquetas (N etiquetas)"** puts one label per pair in stock into the label section.
+- Tested in the browser pane (Nov 18) with the real 1,411 articles and a simulated `/crear`: a test sheet with errors, Stefano's Bsale template (both Briana models already exist → blocked), the create → labels flow, and phone width. **Not yet tested against the real Shopify** (see section 7).
 
 ### The label: 75 × 50 mm (BoxHero's design, enlarged)
 Stefano's labels are **75 × 50 mm** (he first said 50 × 25, then 50 × 30; 75 × 50 is final). The design comes from his BoxHero PDF (142 × 85 pt = 50 × 30 mm) and is drawn as an SVG with **viewBox `0 0 142 94.667`** rendered at 75 × 50 mm:
@@ -149,14 +162,14 @@ If a new PC or printer is added, repeat this setup. The fallback idea, not built
 
 ---
 
-## 5. Worker (`zazi-shopify`, version 5)
+## 5. Worker (`zazi-shopify`, version 6)
 
 Full description and setup steps: **`worker/README.md`**. Summary:
 - **Code:** `worker/zazi-worker.js`. To change it, edit it in the repo, test it locally, push, and Stefano pastes it into the Cloudflare editor and deploys (Claude can read the deployed code with the Cloudflare connector, but can't deploy).
 - **Configuration in Cloudflare** (values known by Stefano; never write them down): variables `SHOPIFY_TIENDA` and `SHOPIFY_CLIENT_ID`, secrets `SHOPIFY_CLIENT_SECRET` and `CLAVE`, KV binding `CATALOGO`, cron `0 8 * * *`. The Bsale secrets (`BSALE_TOKEN`, `WEBHOOK`, `CPN_ID`) are no longer used.
-- **Endpoints** (key in header `X-Clave` or `?clave=`): `GET /articulos` (saved copy; downloads if missing, older than 24 h or format `v` ≠ `FORMATO` = 3), `GET|POST /actualizar`, `GET /diagnostico` (saved-copy summary and live counts), `GET /webhooks` (list) and `POST /webhooks` (register missing), `POST /shopify/webhook` (Shopify notices, signature checked), `scheduled()` (cron). CORS: only `https://zazi-pe.github.io`.
+- **Endpoints** (key in header `X-Clave` or `?clave=`): `POST /crear` (new models, section 4 "Nuevos modelos" and `worker/README.md`), `GET /articulos` (saved copy; downloads if missing, older than 24 h or format `v` ≠ `FORMATO` = 3), `GET|POST /actualizar`, `GET /diagnostico` (saved-copy summary and live counts), `GET /webhooks` (list) and `POST /webhooks` (register missing), `POST /shopify/webhook` (Shopify notices, signature checked), `scheduled()` (cron). CORS: only `https://zazi-pe.github.io`.
 - **Answer for the page (unchanged from Bsale):** `{ actualizado, articulos: [{codigo, sku, nombre, tipo, color, talla}] }`. Variants without a barcode are left out.
-- **Saved copy:** `{ v: 3, actualizado, productos: {id: {n, t}}, articulos: {variantId: {c, s, p, co, ta}} }` (numeric Shopify ids). The access token is cached in KV (`token-shopify`) and renewed about once a day; a 401 gets a new token and retries once.
+- **Saved copy:** `{ v: 3, actualizado, productos: {id: {n, t}}, articulos: {variantId: {c, s, p, co, ta}} }` (numeric Shopify ids). The access token is cached in KV (`token-shopify-v6`; renaming the key forces a fresh token after a scope change) and renewed about once a day; a 401 gets a new token and retries once.
 - **Full download:** one bulk operation: 1 token request (when needed) + 1 start + up to 40 status checks + 1 file download, within the ~50 outgoing requests allowed per run.
 - **Webhooks:** only the product id is used; the product is re-read from Shopify and its variants replaced (removed if no longer ACTIVE or deleted). **KV is written only if something on the labels changed** (name, type, SKU, barcode, color, size), so price and stock edits that fire `products/update` don't use KV writes. A product with more than 100 variants triggers a full download.
 
@@ -188,19 +201,15 @@ As far as known: about 100k worker requests a day, about 50 outgoing requests pe
 
 ## 7. Next steps (in Stefano's priority order)
 
-1. **Catalogs ↔ Shopify (current focus).** Phases 1 (worker) and 2 (label page) of the Shopify move are done. Phase 3 connects the two catalog sites:
-   - Two static catalog sites, `Zazi-pe/Zazi` and `Zazi-pe/Zazi-Modelos`, on GitHub Pages (same origin as this page). Their data is `productos.json`, edited through `admin.html`; one catalog product = **one model + one color**. Each product has an empty `sku` field reserved for the inventory link. Details in the catalogs' own `docs/handoff.md`.
-   - **Agreed with Stefano:** Shopify controls **sizes, stock and prices**; photos, descriptions, "Nuevo" and the vitrina stay in `productos.json`.
-   - **Planned approach:** the public stores read price and per-size availability directly from Shopify's **Storefront API** (its token is meant to be public; it gives available yes/no, not counts), so the worker isn't needed for the stores. Products must be published to the sales channel the Storefront token uses. The admin replaces its price and size fields with a link to a Shopify product + color.
-   - Match catalog products to Shopify by **product + color** (one Shopify product = one model with all its colors).
-   - To plan first with Stefano: the exact link field in `productos.json`, what the store shows while Shopify loads or if it fails, and whether the catalog's price is dropped entirely.
-2. **Test the webhooks live:** rename a product (or change a barcode) in Shopify, wait about 10 s, reload the label page **without** clicking Actualizar, and search for it. If it fails, check the worker's Observability/Logs and `GET /webhooks`.
-3. **Adapt the Excel paths in the label page to Shopify:** the offline backup ("Cargar productos desde un Excel") still expects Bsale's product Excel; it should read Shopify's product CSV export (columns like Title, Option1/Option2 Name/Value, Variant SKU, Variant Barcode). Also check that the import page finds the quantity in Shopify's inventory export.
-4. **Load new shipments into Shopify** (New Athletic, I-RUN). Workflow idea from the Bsale plan: Stefano sends the documents (factura, guía, NA Excel, box photos) and Claude returns a file to import plus a SKU + Cantidad file for the label page's import. Now the target is **Shopify's product CSV import** (or the Admin API, which would need write access). Always cross-check totals against the document and flag mismatches.
-   - **New open question:** Shopify doesn't generate SKUs or barcodes the way Bsale did. New variants need them: e.g. new EAN-13s starting with `20` (checked as unique against the worker's `/articulos`) and SKUs in the same `SKU-XXXXXXXX` style, or another rule Stefano picks.
+1. **Deploy and test "Nuevos modelos" live.** Stefano pastes worker version 6 into Cloudflare and deploys (the app's version 3 scopes are already active). Then a real test with a small sheet (one test model, a couple of sizes, some stock): check in Shopify that the product, options, prices, cost, barcodes, SKUs, stock at the location and both channels are right, print a label, then **delete the test product in Shopify** (Stefano does it, or Claude only with his explicit OK).
+2. **Stock upload tool (next, separate from Nuevos modelos):** add stock to existing models (e.g. by barcode/SKU and quantity). Not designed yet.
+3. **Load new shipments** (New Athletic, I-RUN) with Nuevos modelos. Stefano fills the sheet from the documents (factura, guía, NA Excel, box photos); Claude can help prepare it and cross-check totals.
    - **Pilot: the I-RUN factura (144 pairs). Waiting on Stefano:** color names for M3, F7, F9, M4, M6 (box photos); product naming ("354M" vs "I-RUN 354M"…); sale price per style.
-   - Open for NA: use NA's code+size as the variant barcode (so NA boxes need no labels), or ZAZI codes and labels; product naming (NA's model name from the box, or the code).
-5. Later or optional:
+   - NA: its code+size could go in the "Código de barras" column (so NA boxes need no labels), or leave it empty for ZAZI codes; product naming (NA's model name from the box, or the code).
+   - Then connect the new catalog products (Anda, I-RUN) by SKU in the catalog admins.
+4. **Test the webhooks live:** rename a product (or change a barcode) in Shopify, wait about 10 s, reload the label page **without** clicking Actualizar, and search for it. If it fails, check the worker's Observability/Logs and `GET /webhooks`.
+5. **Adapt the label page's other Excel paths to Shopify:** the offline backup ("Cargar productos desde un Excel") still expects Bsale's product Excel. The label import ("Importar desde Excel") reads cells as displayed text (`raw: false`), so a long numeric SKU stored as a number in Excel (like the You SKUs) can arrive as "7.94E+13" and not match; reading raw values (as Nuevos modelos does) would fix it.
+6. Later or optional:
    - brand names on labels from Shopify's Vendor (section 1),
    - "print labels for a reception" read directly from Shopify,
    - Safari/Firefox print testing.

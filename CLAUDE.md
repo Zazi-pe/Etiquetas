@@ -1,6 +1,6 @@
 # Etiquetas (label printing page for Shopify)
 
-Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html`
+Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html` with two sections: **Imprimir etiquetas** and **Nuevos modelos** (creates models in Shopify from an Excel)
 
 ## Start of every session
 1. Run `git pull` first.
@@ -8,8 +8,8 @@ Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html`
 
 ## Business context
 - ZAZI is a shoe store in Lima, Peru (SP SHOP S.A.C.). Stefano is a backend developer who works there; his mother heads the business, so he doesn't control every decision.
-- Inventory moved from BoxHero to Bsale, and in Nov 2026 from Bsale to **Shopify** (Bsale is being shut off). All barcodes and SKUs were migrated unchanged. One Shopify product = one model with all its colors; one variant = color + size (options "Color" and "Talla"). One location. Shopify doesn't generate SKUs or barcodes for new products (open question, handoff section 7).
-- This page prints thermal labels for Shopify variants, copying Stefano's BoxHero design. The current big task is connecting the catalog repos `Zazi` and `Zazi-Modelos` (siblings in `~/ClaudeCode/Zazi-pe/`) to Shopify; loading New Athletic and I-RUN shipments comes after (handoff, section 7).
+- Inventory moved from BoxHero to Bsale, and in Nov 2026 from Bsale to **Shopify** (Bsale is being shut off). All barcodes and SKUs were migrated unchanged. One Shopify product = one model with all its colors; one variant = color + size (options "Color" and "Talla"). One location. Shopify doesn't generate SKUs or barcodes; the Nuevos modelos tool does (EAN-13 starting with `20`, used as both barcode and SKU) when the sheet leaves them empty.
+- This page prints thermal labels for Shopify variants, copying Stefano's BoxHero design, and creates new models in Shopify ("Nuevos modelos"). The catalog repos `Zazi` and `Zazi-Modelos` (siblings in `~/ClaudeCode/Zazi-pe/`) read price and stock from Shopify. Next: a separate stock upload tool, and loading New Athletic and I-RUN shipments (handoff, section 7).
 
 ## How Stefano works
 - He writes in English. All user-facing copy is Spanish (Peru). Code identifiers and comments are in Spanish.
@@ -19,7 +19,7 @@ Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html`
 
 ## How it fits together
 - `index.html` loads articles from the Cloudflare worker `zazi-shopify` (constant `WORKER`): `GET /articulos` with header `X-Clave`; the key is stored in `localStorage["zazi-etiquetas-clave"]`.
-- **The worker code is in `worker/zazi-worker.js`** (version 5; `worker/README.md` explains it). It reads Shopify's Admin API with a token from the "ZAZI Connector" app (client credentials), downloads with a bulk operation, keeps a copy in KV `CATALOGO`, and has a nightly cron and Shopify product webhooks. Edit and test it here (Node with mocked `fetch` and KV), push, then Stefano pastes it into Cloudflare and deploys. The Cloudflare connector can read the deployed code to check it.
+- **The worker code is in `worker/zazi-worker.js`** (version 6; `worker/README.md` explains it). `POST /crear` creates new models (never touches existing products). It reads Shopify's Admin API with a token from the "ZAZI Connector" app (client credentials), downloads with a bulk operation, keeps a copy in KV `CATALOGO`, and has a nightly cron and Shopify product webhooks. Edit and test it here (Node with mocked `fetch` and KV), push, then Stefano pastes it into Cloudflare and deploys. The Cloudflare connector can read the deployed code to check it.
 - Shopify's Admin API version is 2026-10: `ProductVariant.barcode` is deprecated, use `barcodes`. The Shopify connector in Claude Code can run read-only queries against the store.
 - The worker's CORS allows only `https://zazi-pe.github.io`, so opening `index.html` as a local file won't load data. Test with Playwright and mocked routes instead.
 - "Importar desde Excel" reads SKU plus quantity (columns `Copias`, then `Cantidad`, then `Stock`). The quantity is only the number of labels; it doesn't have to match the stock in Shopify.
@@ -31,6 +31,7 @@ Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html`
 - Brand names are skipped for now ("M:" prints empty). Type text (Shopify product type) and product names print exactly as in Shopify.
 - Always read color and size from the variant options ("Color", "Talla"), never by parsing the variant title.
 - Printing uses `@page { size: 75mm 50mm; margin: 0 }`. On a new PC or printer, a 75 × 50 mm custom paper must be created in the printer driver.
+- **Nuevos modelos:** one row per color and size (Bsale-style sheet; Bsale's template also works). Empty barcode/SKU → generated; filled → used as given. Empty stock → 0. Costo without IGV. **A model that already exists in Shopify is an error and is never modified**; adding stock to existing models will be a separate tool. Read Excel cells raw so long numeric codes stay exact.
 
 ## Critical rules
 - **Never write token, key or secret values (SHOPIFY_CLIENT_SECRET, CLAVE) into any file.** The repo is public.

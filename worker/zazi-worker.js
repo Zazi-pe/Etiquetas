@@ -1,8 +1,9 @@
 /* ============================================================
    ZAZI — puente con Shopify (Cloudflare Worker)
-   Versión 5: guarda una copia de los artículos activos de Shopify y se la da
-   a la página de etiquetas (zazi-pe.github.io/Etiquetas).
-   Solo lectura: no crea ni cambia productos en Shopify (solo registra sus propios webhooks).
+   Versión 6: guarda una copia de los artículos activos de Shopify y se la da
+   a la página de etiquetas (zazi-pe.github.io/Etiquetas), y crea modelos nuevos
+   desde la herramienta "Nuevos modelos" de esa página.
+   Nunca cambia ni borra productos que ya existen en Shopify.
 
    Configuración en Cloudflare:
      Variables  SHOPIFY_TIENDA          dirección .myshopify.com de la tienda (sin https://)
@@ -17,6 +18,7 @@
      POST /actualizar     descarga todo de nuevo ahora
      GET  /diagnostico    resumen de la copia y conteos en vivo
      GET  /webhooks       webhooks registrados;  POST /webhooks  los registra
+     POST /crear          crea modelos nuevos (hasta 10 por pedido) con su stock
    Webhooks de Shopify (productos creados, cambiados o eliminados):
      POST /shopify/webhook   (firmados por Shopify; se comprueba la firma)
    ============================================================ */
@@ -25,7 +27,7 @@ const VERSION_API = "2026-10";
 const ORIGENES = ["https://zazi-pe.github.io"];      // páginas que pueden pedir el catálogo
 const VIGENCIA = 24 * 3600 * 1000;                   // una copia de más de 24 h se renueva
 const CLAVE_KV = "catalogo";
-const CLAVE_TOKEN = "token-shopify";
+const CLAVE_TOKEN = "token-shopify-v6";             // nombre nuevo = token nuevo con los permisos nuevos
 const FORMATO = 3;                                   // sube cuando cambia lo que se guarda (3 = Shopify)
 const TEMAS = ["PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE"];
 const RUTA_WEBHOOK = "/shopify/webhook";
@@ -67,6 +69,11 @@ export default {
         return json(paraPagina(await descargar(env)), 200, cors);
       }
       if (url.pathname === "/diagnostico") return json(await diagnostico(env), 200, cors);
+      if (url.pathname === "/crear" && request.method === "POST") {
+        let cuerpo = null;
+        try { cuerpo = await request.json(); } catch (e) { /* cuerpo mal escrito */ }
+        return json(await crear(env, cuerpo), 200, cors);
+      }
       if (url.pathname === "/webhooks") {
         if (request.method === "POST") return json(await registrarWebhooks(env, url.origin + RUTA_WEBHOOK), 200, cors);
         return json(await listarWebhooks(env), 200, cors);
@@ -285,6 +292,167 @@ async function procesarWebhook(env, tema, aviso) {
 }
 function variantesDe(c, pid) {
   return Object.keys(c.articulos).filter((k) => c.articulos[k].p === pid).sort().map((k) => [k, c.articulos[k]]);
+}
+
+/* ---------- /crear: modelos nuevos desde la herramienta "Nuevos modelos" ----------
+   Recibe { modelos: [{ nombre, tipo, marca, variantes: [{ color, talla, codigo, sku, stock, costo, precio }] }] }
+   (una variante por color y talla). Un modelo que ya existe en Shopify NO se toca: se devuelve como error.
+   Código de barras vacío: se genera un EAN-13 que empieza con 20. SKU vacío: igual al código de barras.
+   Devuelve { resultados: [{ nombre, ok, errores, avisos, articulos: [{ codigo, sku, nombre, tipo, color, talla, stock }] }] } */
+const MAX_MODELOS = 10;                              // por pedido (límite de consultas del plan gratis de Cloudflare)
+const nrm = (t) => String(t == null ? "" : t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const textoDe = (t) => String(t == null ? "" : t).trim();
+
+// EAN-13: "20" + 10 cifras al azar + dígito de control
+function ean13() {
+  const d = [2, 0];
+  const azar = crypto.getRandomValues(new Uint8Array(10));
+  for (const b of azar) d.push(b % 10);
+  const suma = d.reduce((s, x, i) => s + x * (i % 2 ? 3 : 1), 0);
+  d.push((10 - (suma % 10)) % 10);
+  return d.join("");
+}
+
+function revisarModelo(m, c, usados) {
+  const errores = [];
+  const nombre = textoDe(m && m.nombre), tipo = textoDe(m && m.tipo);
+  if (!nombre) errores.push("Falta el nombre del modelo.");
+  if (!tipo) errores.push("Falta el tipo (Zapatillas, Botines…).");
+  const variantes = Array.isArray(m && m.variantes) ? m.variantes : [];
+  if (!variantes.length) errores.push("No tiene filas de color y talla.");
+  if (variantes.length > 250) errores.push("Tiene más de 250 combinaciones de color y talla.");
+  if (nombre && Object.values(c.productos).some((p) => nrm(p.n) === nrm(nombre)))
+    errores.push("El modelo ya existe en Shopify. No se crea de nuevo: agrega el stock a mano o con su código de barras.");
+  const vistos = new Set(), codigosModelo = new Set();
+  const limpias = variantes.map((v, i) => {
+    const f = "Fila " + (i + 1) + ": ";
+    const color = textoDe(v.color), talla = textoDe(v.talla);
+    const precio = Number(v.precio), stock = v.stock === "" || v.stock == null ? 0 : Number(v.stock);
+    const costo = v.costo === "" || v.costo == null ? null : Number(v.costo);
+    const codigo = textoDe(v.codigo), sku = textoDe(v.sku);
+    if (!color || !talla) errores.push(f + "falta el color o la talla.");
+    const k = nrm(color) + "|" + nrm(talla);
+    if (color && talla && vistos.has(k)) errores.push(f + color + " talla " + talla + " está repetido.");
+    vistos.add(k);
+    if (!(precio > 0)) errores.push(f + "el precio no es válido.");
+    if (!(Number.isInteger(stock) && stock >= 0 && stock <= 9999)) errores.push(f + "el stock no es válido.");
+    if (costo !== null && !(costo >= 0)) errores.push(f + "el costo no es válido.");
+    [codigo, sku].forEach((x, j) => {
+      if (!x) return;
+      if (usados.has(nrm(x)) || codigosModelo.has(nrm(x))) errores.push(f + (j ? "el SKU " : "el código de barras ") + x + " ya existe o está repetido.");
+    });
+    if (codigo) codigosModelo.add(nrm(codigo));
+    if (sku && nrm(sku) !== nrm(codigo)) codigosModelo.add(nrm(sku));
+    return { color, talla, precio, stock, costo, codigo, sku };
+  });
+  return { nombre, tipo, marca: textoDe(m && m.marca), variantes: limpias, errores };
+}
+
+async function crear(env, cuerpo) {
+  const modelos = cuerpo && Array.isArray(cuerpo.modelos) ? cuerpo.modelos : [];
+  if (!modelos.length) return { error: "No llegaron modelos." };
+  if (modelos.length > MAX_MODELOS) return { error: "Máximo " + MAX_MODELOS + " modelos por pedido." };
+  let c = await leer(env);
+  if (!c || c.v !== FORMATO) c = await descargar(env);
+
+  // Todos los códigos que ya existen (barras y SKU), para no repetir ninguno
+  const usados = new Set();
+  Object.values(c.articulos).forEach((a) => { if (a.c) usados.add(nrm(a.c)); if (a.s) usados.add(nrm(a.s)); });
+
+  // Ubicación (la tienda) y canales donde se publica (Tienda online y Punto de venta)
+  const conf = await shopify(env, `{
+    locations(first: 10) { nodes { id isActive } }
+    publications(first: 20) { nodes { id catalog { title } } }
+  }`);
+  const ubicacion = (conf.locations.nodes.find((l) => l.isActive) || {}).id;
+  if (!ubicacion) return { error: "Shopify no tiene una ubicación activa para el stock." };
+  const canales = conf.publications.nodes.filter((p) => /online store|point of sale|tienda online|punto de venta/i.test((p.catalog && p.catalog.title) || ""));
+
+  const resultados = [];
+  let cambio = false;
+  for (const m of modelos) {
+    const r = revisarModelo(m, c, usados);
+    const res = { nombre: r.nombre || "(sin nombre)", ok: false, errores: r.errores, avisos: [], articulos: [] };
+    resultados.push(res);
+    if (r.errores.length) continue;
+
+    // Revisión en vivo: si el modelo ya está en Shopify (aunque la copia no lo tenga), no se crea
+    const busca = (await shopify(env, `query($q: String!) { products(first: 10, query: $q) { nodes { title } } }`,
+      { q: "title:\"" + r.nombre.replace(/["\\]/g, "") + "\"" })).products.nodes;
+    if (busca.some((p) => nrm(p.title) === nrm(r.nombre))) {
+      res.errores.push("El modelo ya existe en Shopify. No se crea de nuevo: agrega el stock a mano o con su código de barras.");
+      continue;
+    }
+
+    // Códigos: los que vienen se usan; los vacíos se generan
+    r.variantes.forEach((v) => {
+      if (!v.codigo) { do { v.codigo = ean13(); } while (usados.has(nrm(v.codigo))); }
+      usados.add(nrm(v.codigo));
+      if (!v.sku) v.sku = v.codigo;
+      usados.add(nrm(v.sku));
+    });
+    const num = (t) => (isNaN(parseFloat(t)) ? Infinity : parseFloat(t));
+    const colores = [...new Set(r.variantes.map((v) => v.color))];
+    const tallas = [...new Set(r.variantes.map((v) => v.talla))].sort((a, b) => num(a) - num(b) || a.localeCompare(b));
+    const orden = (v) => colores.indexOf(v.color) * 1000 + tallas.indexOf(v.talla);
+    const variantes = r.variantes.slice().sort((a, b) => orden(a) - orden(b));
+
+    const entrada = {
+      title: r.nombre, productType: r.tipo, vendor: r.marca || undefined, status: "ACTIVE",
+      productOptions: [
+        { name: "Color", values: colores.map((x) => ({ name: x })) },
+        { name: "Talla", values: tallas.map((x) => ({ name: x })) }
+      ],
+      variants: variantes.map((v) => ({
+        optionValues: [{ optionName: "Color", name: v.color }, { optionName: "Talla", name: v.talla }],
+        price: v.precio.toFixed(2),
+        sku: v.sku,
+        barcodes: [{ value: v.codigo }],
+        inventoryPolicy: "DENY",
+        taxable: true,
+        inventoryItem: { tracked: true, ...(v.costo !== null ? { cost: v.costo.toFixed(2) } : {}) },
+        inventoryQuantities: [{ locationId: ubicacion, name: "available", quantity: v.stock }]
+      }))
+    };
+    let creado;
+    try {
+      creado = (await shopify(env, `mutation($e: ProductSetInput!) {
+        productSet(input: $e, synchronous: true) {
+          product { id title productType variants(first: 250) { nodes { id sku selectedOptions { name value } barcodes(first: 1) { nodes { value } } } } }
+          userErrors { field message }
+        }
+      }`, { e: entrada })).productSet;
+    } catch (e) {
+      res.errores.push("Shopify no lo creó: " + String(e.message || e));
+      continue;
+    }
+    if (creado.userErrors && creado.userErrors.length) { res.errores.push(...creado.userErrors.map((e) => "Shopify: " + e.message)); continue; }
+    const p = creado.product;
+    res.ok = true;
+
+    // Publicar en la Tienda online y el Punto de venta
+    if (canales.length) {
+      try {
+        const pub = (await shopify(env, `mutation($id: ID!, $i: [PublicationInput!]!) { publishablePublish(id: $id, input: $i) { userErrors { message } } }`,
+          { id: p.id, i: canales.map((x) => ({ publicationId: x.id })) })).publishablePublish;
+        if (pub.userErrors && pub.userErrors.length) res.avisos.push("Creado, pero no se pudo publicar: " + pub.userErrors.map((e) => e.message).join("; "));
+      } catch (e) { res.avisos.push("Creado, pero no se pudo publicar en los canales: " + String(e.message || e)); }
+    } else res.avisos.push("Creado, pero no se encontraron los canales Tienda online y Punto de venta para publicarlo.");
+
+    // Se agrega a la copia (así las etiquetas lo ven enseguida y no se puede crear dos veces)
+    const pid = numero(p.id);
+    c.productos[pid] = aProducto(p);
+    const stockDe = new Map(variantes.map((v) => [nrm(v.color) + "|" + nrm(v.talla), v.stock]));
+    p.variants.nodes.forEach((v) => {
+      const codigo = v.barcodes && v.barcodes.nodes[0] ? v.barcodes.nodes[0].value : "";
+      const a = aArticulo(v, pid, codigo);
+      c.articulos[numero(v.id)] = a;
+      res.articulos.push({ codigo: a.c, sku: a.s, nombre: c.productos[pid].n, tipo: c.productos[pid].t, color: a.co, talla: a.ta, stock: stockDe.get(nrm(a.co) + "|" + nrm(a.ta)) || 0 });
+    });
+    cambio = true;
+  }
+  if (cambio) await guardar(env, c);
+  return { resultados };
 }
 
 /* ---------- /webhooks: ver y registrar los webhooks de la app ---------- */
