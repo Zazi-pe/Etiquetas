@@ -933,6 +933,7 @@ h2{font-size:1.25rem;font-weight:600}
   const POR_PEDIDO = 10;            // modelos por pedido al worker
   let nmModelos = [];               // modelos leídos del Excel, con sus errores
   let nmCreados = [];               // artículos creados (para imprimir sus etiquetas)
+  let nmEjemplos = 0;               // filas de ejemplo que se saltaron
 
   function pintarEstadoNuevos() {
     const listo = deShopify && ARTICULOS.length > 0;
@@ -986,10 +987,12 @@ h2{font-size:1.25rem;font-weight:600}
     if (fila < 0) return null;                       // esta hoja no tiene el encabezado
     const celda = (r, k) => (col[k] >= 0 ? valor(r[col[k]]) : "");
     const porModelo = new Map();
+    let ejemplos = 0;
     filas.slice(fila + 1).forEach((r, i) => {
       if (!r) return;
       const nombre = celda(r, "nombre");
       if (!nombre) return;
+      if (norm(nombre).startsWith("ejemplo")) { ejemplos++; return; }      // filas de ejemplo de la plantilla
       let color = celda(r, "color"), talla = celda(r, "talla");
       if ((!color || !talla) && celda(r, "variante").includes("/")) {       // "Negro / 37"
         const [c, t] = celda(r, "variante").split("/").map((x) => x.trim());
@@ -1009,7 +1012,8 @@ h2{font-size:1.25rem;font-weight:600}
       });
     });
     const modelos = [...porModelo.values()];
-    if (!modelos.length) throw new Error("El Excel tiene el encabezado, pero ninguna fila con nombre de modelo.");
+    if (!modelos.length) throw new Error(ejemplos ? "El Excel solo tiene las filas de ejemplo. Agrega tus modelos debajo de los encabezados." : "El Excel tiene el encabezado, pero ninguna fila con nombre de modelo.");
+    modelos.ejemplos = ejemplos;
     return modelos;
   }
 
@@ -1068,6 +1072,7 @@ h2{font-size:1.25rem;font-weight:600}
       ? `${plural(buenos.length, "modelo listo", "modelos listos")} para crear: ${plural(buenos.reduce((s, m) => s + m.variantes.length, 0), "artículo", "artículos")}, ${plural(nPares, "par", "pares")} en stock.`
         + (malos.length ? ` <span class="falta">${plural(malos.length, "modelo tiene errores y no se creará", "modelos tienen errores y no se crearán")}.</span>` : "")
       : `<span class="falta">Ningún modelo se puede crear. Corrige el Excel y vuelve a cargarlo.</span>`;
+    if (nmEjemplos) $("#nm-resumen").innerHTML += ` Se saltaron ${plural(nmEjemplos, "fila de ejemplo", "filas de ejemplo")}.`;
     $("#nm-modelos").innerHTML = nmModelos.map((m) => {
       const colores = porColor(m.variantes);
       const propios = m.variantes.filter((v) => v.codigo || v.sku).length;
@@ -1098,6 +1103,7 @@ h2{font-size:1.25rem;font-weight:600}
       }
       if (!modelos) throw new Error("No se encontraron las columnas Nombre y Talla. Usa la plantilla.");
       nmModelos = revisarNuevos(modelos);
+      nmEjemplos = modelos.ejemplos || 0;
       pintarVistaNuevos();
     } catch (err) {
       nmError((err && err.message) || "No se pudo leer el archivo.");
@@ -1164,21 +1170,12 @@ h2{font-size:1.25rem;font-weight:600}
   ["dragenter", "dragover"].forEach((t) => nmZona.addEventListener(t, (e) => { e.preventDefault(); nmZona.classList.add("encima"); }));
   ["dragleave", "drop"].forEach((t) => nmZona.addEventListener(t, () => nmZona.classList.remove("encima")));
   nmZona.addEventListener("drop", (e) => { e.preventDefault(); cargarNuevos(e.dataTransfer.files && e.dataTransfer.files[0]); });
+  // La plantilla es un archivo fijo con instrucciones por columna (plantillas/crear-plantilla-nuevos-modelos.py)
   $("#nm-plantilla").addEventListener("click", () => {
-    const hoja = XLSX.utils.aoa_to_sheet([["Tipo", "Nombre", "Marca", "Color", "Talla", "Código de barras", "SKU", "Stock", "Costo (sin IGV)", "Precio"]]);
-    hoja["!cols"] = [14, 22, 12, 14, 7, 18, 18, 7, 15, 9].map((wch) => ({ wch }));
-    const ejemplo = XLSX.utils.aoa_to_sheet([
-      ["Ejemplo: una fila por color y talla. Deja vacíos el código de barras y el SKU para que se generen. Stock vacío = 0. Esta hoja no se lee."],
-      [],
-      ["Tipo", "Nombre", "Marca", "Color", "Talla", "Código de barras", "SKU", "Stock", "Costo (sin IGV)", "Precio"],
-      ["Zapatillas", "Briana Bajo", "SHA", "Negro", 35, "", "", 2, 38, 69.9],
-      ["Zapatillas", "Briana Bajo", "SHA", "Negro", 36, "", "", 3, 38, 69.9],
-      ["Zapatillas", "Briana Bajo", "SHA", "Print", 35, "", "", "", 38, 69.9]
-    ]);
-    const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hoja, "Modelos");
-    XLSX.utils.book_append_sheet(libro, ejemplo, "Ejemplo");
-    XLSX.writeFile(libro, "plantilla-nuevos-modelos.xlsx");
+    const enlace = document.createElement("a");
+    enlace.href = "plantilla-nuevos-modelos.xlsx";
+    enlace.download = "plantilla-nuevos-modelos.xlsx";
+    document.body.appendChild(enlace); enlace.click(); enlace.remove();
   });
   $("#nm-atras").addEventListener("click", () => nmPaso("cargar"));
   $("#nm-otro").addEventListener("click", () => { nmModelos = []; nmPaso("cargar"); });

@@ -40,7 +40,8 @@ If Shopify rejects it (401), the worker asks for a new one and retries once.
 - `GET /articulos` → the saved copy. Downloads first if there's no copy, it's older than 24 h,
   or its format version `v` ≠ `FORMATO` (currently 3 = Shopify).
 - `GET|POST /actualizar` → full download now, returns the same shape.
-- `GET /diagnostico` → saved-copy summary + live product/variant counts.
+- `GET /diagnostico` → saved-copy summary + live product/variant counts + `permisos` (the scopes the current token really has).
+- A GraphQL "access denied" gets a fresh token and one retry (a token cached before a scope change lacks the new scopes).
 - `POST /crear` → creates new models (see below). Body `{ modelos: [...] }`, at most 10 per call.
 - `GET /webhooks` → the app's webhook subscriptions. `POST /webhooks` → registers the missing ones
   (`PRODUCTS_CREATE`, `PRODUCTS_UPDATE`, `PRODUCTS_DELETE`) pointing at this worker's `/shopify/webhook`.
