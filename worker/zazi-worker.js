@@ -144,6 +144,9 @@ async function shopify(env, consulta, variables, reintento) {
   if (d.errors && d.errors.length) {
     const limite = d.errors.some((e) => e.extensions && e.extensions.code === "THROTTLED");
     if (limite && reintento !== "limite") { await esperar(2000); return shopify(env, consulta, variables, "limite"); }
+    // Permiso negado: puede ser un token guardado de antes de que la app tuviera ese permiso -> uno nuevo, una vez
+    const negado = d.errors.some((e) => /access denied/i.test(e.message || "") || (e.extensions && e.extensions.code === "ACCESS_DENIED"));
+    if (negado && !reintento) return shopify(env, consulta, variables, "token");
     throw new Error(d.errors.map((e) => e.message).join("; "));
   }
   return d.data;
@@ -481,11 +484,13 @@ async function diagnostico(env) {
     shop { name }
     productos: productsCount(query: "status:active") { count }
     variantes: productVariantsCount(query: "product_status:active") { count }
+    currentAppInstallation { accessScopes { handle } }
   }`);
   return {
     copiaGuardada: c && c.v === FORMATO ? { actualizado: new Date(c.actualizado).toISOString(), productos: Object.keys(c.productos).length, variantes: Object.keys(c.articulos).length } : null,
     tienda: d.shop.name,
     productosActivos: d.productos.count,
-    variantesActivas: d.variantes.count
+    variantesActivas: d.variantes.count,
+    permisos: d.currentAppInstallation.accessScopes.map((s) => s.handle).sort()
   };
 }
