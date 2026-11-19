@@ -395,6 +395,15 @@ h2{font-size:1.25rem;font-weight:600}
   const porCodigo = new Map();      // código de barras -> artículo
   const porSku = new Map();         // SKU -> artículo
   const elegidos = new Map();       // código de barras -> copias (en el orden en que se agregaron)
+  const impresos = new Set();       // códigos que ya se mandaron a imprimir (el lote anterior)
+  // Cada lote importado se imprime solo: antes de agregar un Excel nuevo se quitan los ya impresos.
+  // Lo que se agregó a mano después de imprimir se queda. Devuelve cuántos artículos se quitaron.
+  function nuevoLote() {
+    let n = 0;
+    impresos.forEach((c) => { if (elegidos.delete(c)) n++; });
+    impresos.clear();
+    return n;
+  }
 
   /* ============================================================
      ETIQUETA — medidas tomadas del PDF de BoxHero (en puntos, 142 × 85), agrandadas a 75 × 50 mm
@@ -770,6 +779,7 @@ h2{font-size:1.25rem;font-weight:600}
     if (!$("#paso-vista").hidden) mostrarPaso("cargar"); else cerrarImportar();
   });
   $("#imp-siguiente").addEventListener("click", () => {
+    const quitados = nuevoLote();
     let n = 0, total = 0;
     importados.forEach((x) => {
       if (!x.articulo || !x.copias) return;
@@ -779,7 +789,7 @@ h2{font-size:1.25rem;font-weight:600}
     cerrarImportar();
     pintar();
     window.scrollTo(0, 0);
-    avisar(`Se agregaron ${n} ${n === 1 ? "artículo" : "artículos"} (${total} ${total === 1 ? "etiqueta" : "etiquetas"}).`);
+    avisar(`Se agregaron ${n} ${n === 1 ? "artículo" : "artículos"} (${total} ${total === 1 ? "etiqueta" : "etiquetas"}).` + (quitados ? " Se quitó el lote ya impreso." : ""));
   });
 
   /* ============================================================
@@ -923,6 +933,7 @@ h2{font-size:1.25rem;font-weight:600}
       for (let i = 0; i < copias; i++) partes.push(html);
     });
     $("#hoja").innerHTML = partes.join("");
+    elegidos.forEach((_, codigo) => impresos.add(codigo));     // el próximo Excel empieza un lote nuevo
     window.print();
   });
   window.addEventListener("afterprint", () => { $("#hoja").innerHTML = ""; });
@@ -1388,6 +1399,7 @@ h2{font-size:1.25rem;font-weight:600}
     if (confirm("¿Crear " + plural(n, "modelo", "modelos") + " en Shopify con su stock?")) crearNuevos();
   });
   $("#nm-etiquetas").addEventListener("click", () => {
+    const quitados = nuevoLote();
     let n = 0, total = 0;
     nmCreados.forEach((a) => {
       if (!(a.stock > 0) || !porCodigo.has(a.codigo)) return;
@@ -1396,7 +1408,7 @@ h2{font-size:1.25rem;font-weight:600}
     });
     irA("etiquetas");
     pintar();
-    avisar(`Se agregaron ${plural(n, "artículo", "artículos")} (${plural(total, "etiqueta", "etiquetas")}).`);
+    avisar(`Se agregaron ${plural(n, "artículo", "artículos")} (${plural(total, "etiqueta", "etiquetas")}).` + (quitados ? " Se quitó el lote ya impreso." : ""));
   });
   pintarEstadoNuevos();
 

@@ -96,7 +96,7 @@ Single HTML file (about 47 KB), all Spanish, BoxHero-like layout. Built and test
 - Repeated SKUs add up; quantities are capped at 999; a quantity of 0 shows grey ("0 copias: no se imprimirá").
 - SKUs are matched against the Shopify articles from the worker (case- and accent-insensitive). **A SKU not in Shopify shows in red with a ⚠ icon** ("Este SKU no está en Shopify"), using the file's own Producto/Variante text, and is skipped.
 - **Preview step:** summary ("8 artículos, 11 etiquetas listas para agregar. 1 SKU no está en Shopify y no se imprimirá."), a table (Artículo, SKU, Copias), **Atrás** (back one step) and **Siguiente**.
-- **Siguiente** adds the matched items to the main list (**copies add to items already selected**), returns to the main screen with previews, and shows a toast ("Se agregaron N artículos (M etiquetas)").
+- **Siguiente** adds the matched items to the main list and shows a toast ("Se agregaron N artículos (M etiquetas)"). **Each lot prints on its own (Nov 19, Stefano's rule):** pressing Imprimir marks everything in the list as printed; the next import (Excel or Nuevos modelos' "Imprimir etiquetas") first removes those printed items ("Se quitó el lote ya impreso"). Items added by hand after printing stay, and several imports before printing still add up into one lot.
 - Tested with `Stock-actual_ALJOVIN_06-11-2026.xlsx` (8 Acrilico SKUs, 9 labels) plus an unknown SKU and a repeated row: all behaved as above.
 
 ### Nuevos modelos (second section of the page, built Nov 18)
