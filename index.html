@@ -1010,9 +1010,9 @@ h2{font-size:1.25rem;font-weight:600}
     else if (activo && (!nmCat || nmCat.repo !== repo)) t = "Cargando " + repo + "…";
     else if (activo) t = "Se agregarán a Pendientes de " + repo + " (" + plural(nmCat.productos.length, "producto publicado", "productos publicados") + ", " + plural(nmCat.pendientes.length, "pendiente", "pendientes") + "). Allí se les pone foto y color y se publican.";
     $("#nm-cat-estado").textContent = t;
-    const listo = !activo || (nmCat && nmCat.repo === repo);
+    const catListo = !activo || (nmCat && nmCat.repo === repo);
     const buenos = nmModelos.filter(listo).length;
-    $("#nm-crear").disabled = !buenos || !listo;
+    $("#nm-crear").disabled = !buenos || !catListo;
   }
   async function cargarCatalogo() {
     const repo = catElegido();
@@ -1123,12 +1123,12 @@ h2{font-size:1.25rem;font-weight:600}
   }
 
   function pintarEstadoNuevos() {
-    const listo = deShopify && ARTICULOS.length > 0;
-    $("#nm-estado").textContent = listo
+    const cargados = deShopify && ARTICULOS.length > 0;
+    $("#nm-estado").textContent = cargados
       ? "Se revisa contra los " + ARTICULOS.length.toLocaleString("es-PE") + " artículos de Shopify cargados."
       : "Primero carga los artículos de Shopify en \"Imprimir etiquetas\" (con la clave). Hacen falta para revisar que nada se repita.";
-    $("#nm-zona").style.pointerEvents = listo ? "" : "none";
-    $("#nm-zona").style.opacity = listo ? "" : ".45";
+    $("#nm-zona").style.pointerEvents = cargados ? "" : "none";
+    $("#nm-zona").style.opacity = cargados ? "" : ".45";
   }
   function nmPaso(paso) {             // "cargar" | "vista" | "resultado"
     $("#nm-cargar").hidden = paso !== "cargar";
