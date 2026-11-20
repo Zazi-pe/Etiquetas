@@ -35,6 +35,8 @@ Page: https://zazi-pe.github.io/Etiquetas/ · Single file: `index.html` with two
 
 ## Critical rules
 - **Never write token, key or secret values (SHOPIFY_CLIENT_SECRET, CLAVE) into any file.** The repo is public.
+- **Never call `POST /crear` (or anything else that creates or changes things in Shopify or GitHub) just to check something.** A check call once recreated a model Stefano had deleted. Check with `/diagnostico`, `/articulos`, the read-only Shopify connector, or a mocked worker.
+- Labels: each imported lot prints on its own (after Imprimir, the next import removes the printed lot).
 - Verify label changes the way the handoff describes: Playwright (Chromium) print to PDF, rasterize with `pdftoppm`, decode with `pyzbar` at 203 dpi.
 
 ## Updating the handoff (when and how)

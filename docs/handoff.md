@@ -1,8 +1,8 @@
-# ZAZI — Shopify, labels, new models and worker: handoff (living document, last updated November 18, 2026)
+# ZAZI — Shopify, labels, new models and worker: handoff (living document, last updated November 20, 2026)
 
 Living handoff for the **Etiquetas** repo and everything around ZAZI's inventory system: the label printer page, the Cloudflare worker that bridges the inventory system, webhooks, and loading supplier shipments. It lives at `docs/handoff.md` in the Etiquetas repo and is updated at the end of every Claude Code session (see `CLAUDE.md`).
 
-**Inventory moved from Bsale to Shopify (Nov 2026).** Bsale is being shut off. Shopify is already loaded with every Bsale model, and all **barcodes and SKUs were migrated unchanged**, so labels already printed keep scanning. The whole system (labels now, catalogs next) is being moved to Shopify; Bsale details are kept only where they still explain something.
+**Inventory moved from Bsale to Shopify (Nov 2026).** Bsale is being shut off. Shopify is loaded with every Bsale model, and all **barcodes and SKUs were migrated unchanged**, so labels already printed keep scanning. Labels, Nuevos modelos and both catalogs now run on Shopify; Bsale details are kept only where they still explain something.
 
 It replaces the Nov 6 chat handoff. The catalog repos (Zazi, Zazi-Modelos) have their own handoff; section 7 summarizes what this work needs from them.
 
@@ -41,7 +41,7 @@ It replaces the Nov 6 chat handoff. The catalog repos (Zazi, Zazi-Modelos) have 
 | Shopify app | "ZAZI Connector", created in the Shopify Dev Dashboard, installed on the ZAZI store | Gives the worker its access token (client credentials). **Version 3** (Nov 18) scopes: `read_products, write_products, read_inventory, write_inventory, read_locations, write_publications` |
 | Real printing | Windows PC with **Xprinter XP-365B** (also has an XP-318B) | Working. Requires a **75 × 50 mm custom paper size in the printer driver** (see section 4) |
 | Products in Shopify | | All Bsale models migrated. **New Athletic and I-RUN models are not loaded yet** (see section 7) |
-| Catalogs connected to Shopify | | Done Nov 18 (catalog repos' handoff): You and Pasador connected by SKU; Anda and I-RUN not in Shopify yet |
+| Catalogs connected to Shopify | | Catalog repos' handoff. As of Nov 20: You, Pasador and all Anda (D318 = the old 260X, plus D268, D263, D269, D308) connected; 7 Anda D307/D315 colors waiting in Zazi's `pendientes.json`; I-RUN not in Shopify yet |
 | Bsale | | Being shut off. The old worker (version 4) is in this repo's git history |
 
 ---
@@ -202,8 +202,8 @@ As far as known: about 100k worker requests a day, about 50 outgoing requests pe
 
 ## 7. Next steps (in Stefano's priority order)
 
-0. Worker with `producto` and the CORS fix is deployed (checked Nov 19 with the Cloudflare connector). Next: a real test of "Agregar también al catálogo" → publish from the catalog admin.
-1. **Nuevos modelos is live and tested (Nov 19).** Worker version 6 (with the access-denied retry) is deployed; `/diagnostico` shows all 7 permissions. A live test created "PRUEBA Nuevos Modelos – borrar" (Zapatillas, PRUEBA, Negro 35/36 + Blanco 35, stock 1/0/2, cost 10, price 99.90, `gid://shopify/Product/15520067780829`). Checked in Shopify: ACTIVE, published on Online Store and Point of Sale, options Color/Talla, generated EAN-13 `20…` as barcode and SKU, tracked, DENY, taxable, cost 10.00, stock at the Aljovín location; it appeared in `/articulos` at once and a second create was refused ("ya existe"). **Delete that test product in Shopify** if it's still there. Note: Shopify's public search (used by the catalog admin's "connect by SKU") takes a few minutes to index a brand-new product.
+1. **Nuevos modelos is live and in real use (Nov 19–20).** Worker v6 (with `producto`, the CORS fix, add-to-existing and the access-denied retry) is deployed; `/diagnostico` shows all 7 permissions. Stefano has loaded real Anda models with it (D318, D268, D263, D269, D308, D307, D315) and "Agregar también al catálogo" → Publicar in the admin works end to end. If the first test product "PRUEBA Nuevos Modelos – borrar" (`gid://shopify/Product/15520067780829`) is still in Shopify, delete it. Shopify's public search (used by the admin's "connect by SKU" and the page's live check) takes a few minutes to index a brand-new product.
+   - **Lesson (Nov 19):** never call `POST /crear` (or anything that can create) "just to check": a check call recreated D268 after Stefano had deleted it. Use `/diagnostico`, `/articulos`, the Shopify connector (read-only) or a mocked worker instead.
 2. **Stock upload tool (next, separate from Nuevos modelos):** add stock to existing models (e.g. by barcode/SKU and quantity). Not designed yet.
 3. **Load new shipments** (New Athletic, I-RUN) with Nuevos modelos. Stefano fills the sheet from the documents (factura, guía, NA Excel, box photos); Claude can help prepare it and cross-check totals.
    - **Pilot: the I-RUN factura (144 pairs). Waiting on Stefano:** color names for M3, F7, F9, M4, M6 (box photos); product naming ("354M" vs "I-RUN 354M"…); sale price per style.
